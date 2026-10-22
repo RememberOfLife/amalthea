@@ -101,7 +101,7 @@ function App() {
           <section class="card card-body mb-4" aria-labelledby="upload-title">
             <h2 id="upload-title" class="h5">Upload a file</h2>
             <form onSubmit=${event => { event.preventDefault(); const file = selected(); if (!file) return; run(() => upload(file, newName(), scope())); setSelected(); event.currentTarget.reset(); }}>
-              <div class="row g-3 align-items-end"><div class="col-md-6"><label class="form-label" for="upload-file">Choose file</label>
+              <div class="row g-3 align-items-end"><div class="col-md-6">
                 <input id="upload-file" class="form-control" type="file" disabled=${!capable()} onChange=${event => { const file = event.currentTarget.files[0]; setSelected(file); if (file) setNewName(safeName(file.name)); }}/></div>
                 <${Show} when=${selected}><div class="col-md-4"><label class="form-label" for="upload-name">Stored filename</label><input id="upload-name" class="form-control" value=${newName} maxLength="200" pattern="[A-Za-z0-9_][A-Za-z0-9_.]*" required onInput=${e => setNewName(e.currentTarget.value)}/></div><//>
                 <div class="col-md-auto"><button class="btn btn-primary" disabled=${() => !selected() || !capable()}><i class="bi bi-upload" aria-hidden="true"></i> Upload</button></div>
