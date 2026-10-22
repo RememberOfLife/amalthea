@@ -242,11 +242,11 @@ export async function upload(file, name, scope, existing) {
                     if (existing && error.status === 404) {
                         const committed = await api(`/files/${existing.id}`);
                         if (
-                            committed.sha256 === hash &&
+                            (committed.status !== "ready" || committed.sha256 === hash) &&
                             committed.size === file.size
                         ) {
                             patch(key, {
-                                status: "Complete",
+                                status: "Uploaded · see file list for processing status",
                                 complete: true,
                                 offset: file.size,
                                 file: undefined,
@@ -290,13 +290,13 @@ export async function upload(file, name, scope, existing) {
                     );
                 }
                 controller.signal.throwIfAborted();
-                patch(key, { status: "Verifying on server" });
+                patch(key, { status: "Queuing server processing" });
                 await api(`/uploads/${state.id}/finish`, {
                     method: "POST",
                     signal: controller.signal,
                 });
                 patch(key, {
-                    status: "Complete",
+                    status: "Uploaded · see file list for processing status",
                     complete: true,
                     file: undefined,
                 });

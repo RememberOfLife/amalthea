@@ -3,6 +3,7 @@ pub mod configuration;
 pub mod db;
 pub mod error;
 pub mod model;
+pub mod processing;
 pub mod routes;
 pub mod size;
 pub mod storage;
@@ -15,14 +16,42 @@ pub struct App {
     pub settings: configuration::Settings,
     pub db: sqlx::SqlitePool,
     // Serializes metadata/filesystem mutations, including quota reservations and reconciliation.
-    // Streaming downloads never hold this lock.
+    // Chunk I/O and streaming downloads never hold this lock. When both locks
+    // are needed, acquire the upload lock BEFORE mutation. Reconciliation
+    // already holds mutation and may only TRY an upload lock (skip busy uploads).
     pub mutation: Mutex<()>,
+    upload_locks: std::sync::Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>,
+    pub processing: std::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
     pub password_jobs: Semaphore,
     pub login_attempts: Mutex<HashMap<String, (i64, u32)>>,
 }
 pub type State = Arc<App>;
 
 impl App {
+    /// Serializes writes/cancellation/publication for one temporary upload only.
+    fn upload_lock(&self, id: &str) -> Arc<Mutex<()>> {
+        {
+            let mut locks = self.upload_locks.lock().unwrap();
+            locks.retain(|_, lock| lock.strong_count() > 0);
+            match locks.get(id).and_then(std::sync::Weak::upgrade) {
+                Some(lock) => lock,
+                None => {
+                    let lock = Arc::new(Mutex::new(()));
+                    locks.insert(id.to_owned(), Arc::downgrade(&lock));
+                    lock
+                }
+            }
+        }
+    }
+
+    pub async fn lock_upload(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.upload_lock(id).lock_owned().await
+    }
+
+    pub fn try_lock_upload(&self, id: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.upload_lock(id).try_lock_owned().ok()
+    }
+
     pub async fn open(settings: configuration::Settings) -> anyhow::Result<State> {
         for name in ["users", "uploads"] {
             let path = settings.data_dir.join(name);
@@ -48,6 +77,8 @@ impl App {
             settings,
             db,
             mutation: Mutex::new(()),
+            upload_locks: std::sync::Mutex::new(HashMap::new()),
+            processing: std::sync::Mutex::new(HashMap::new()),
             password_jobs: Semaphore::new(2),
             login_attempts: Mutex::new(HashMap::new()),
         }))

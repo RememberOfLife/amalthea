@@ -29,6 +29,7 @@ pub fn router(app: State) -> Router {
             get(file_meta).patch(rename).delete(delete_file),
         )
         .route("/files/{id}/content", get(download))
+        .route("/files/{id}/retry", post(retry_processing))
         .route("/files/{id}/links", get(links).post(create_link))
         .route("/links/{id}", axum::routing::delete(revoke_link))
         .route("/links/{id}/logs", get(logs))
@@ -257,6 +258,7 @@ async fn rename(
     }
     let _guard = app.mutation.lock().await;
     let record = storage::owned_file(&app, &user, &id).await?;
+    record.require_ready()?;
     if record.name == input.name {
         return Ok(StatusCode::NO_CONTENT);
     }
@@ -308,8 +310,13 @@ async fn delete_file(
     headers: HeaderMap,
 ) -> Result<StatusCode> {
     let user = auth::user(&app, &headers).await?;
+    let _upload_guard = app.lock_upload(&id).await;
     let _guard = app.mutation.lock().await;
     let record = storage::owned_file(&app, &user, &id).await?;
+    storage::cancel_processing(&app, &id);
+    if record.cleanup_upload {
+        storage::remove_if_exists(&storage::upload_path(&app, &id)).await?;
+    }
     tokio::fs::remove_file(storage::user_dir(&app, &user)?.join(record.disk_name()?)).await?;
     sqlx::query("DELETE FROM files WHERE id = ?")
         .bind(id)
@@ -356,7 +363,9 @@ async fn links(
     headers: HeaderMap,
 ) -> Result<Json<Value>> {
     let user = auth::user(&app, &headers).await?;
-    storage::owned_file(&app, &user, &id).await?;
+    storage::owned_file(&app, &user, &id)
+        .await?
+        .require_ready()?;
     let rows = sqlx::query_as::<_, LinkRecord>("SELECT id, label, expires_at, revoked_at, created_at FROM links WHERE file_id = ? ORDER BY created_at DESC").bind(id).fetch_all(&app.db).await?;
     Ok(Json(json!(rows)))
 }
@@ -432,4 +441,22 @@ async fn public_download(
 ) -> Result<Response> {
     let (user, file, link) = public_file(&app, &token).await?;
     transfers::content(&app, &user, file, headers, method, Some(link)).await
+}
+
+async fn retry_processing(
+    AxumState(app): AxumState<State>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode> {
+    let user = auth::user(&app, &headers).await?;
+    let _guard = app.mutation.lock().await;
+    let file = storage::owned_file(&app, &user, &id).await?;
+    if file.status != "failed" {
+        return Err(Error::conflict("Only failed processing can be retried"));
+    }
+    sqlx::query("UPDATE files SET status = 'processing', processing_error = NULL WHERE id = ?")
+        .bind(id)
+        .execute(&app.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }

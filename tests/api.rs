@@ -135,6 +135,20 @@ impl Harness {
         )
         .await
     }
+    async fn drain(&self) {
+        while let Some(file) = amalthea::processing::next(&self.app, 0, &Default::default())
+            .await
+            .unwrap()
+        {
+            amalthea::processing::process(
+                &self.app,
+                &file,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        }
+    }
     async fn file(&self, cookie: &str, name: &str, bytes: &[u8]) -> String {
         let id = self.start(cookie, name, bytes).await;
         if !bytes.is_empty() {
@@ -142,9 +156,11 @@ impl Harness {
         }
         let (status, body) = self.finish(cookie, &id).await;
         assert_eq!(status, StatusCode::OK, "{body}");
+        self.drain().await;
         id
     }
     async fn link(&self, cookie: &str, id: &str) -> (String, String) {
+        self.drain().await;
         let (status, body) = self
             .json(
                 "POST",
@@ -402,9 +418,16 @@ async fn checksum_offset_and_size_are_enforced() {
     );
     assert_eq!(h.finish(&cookie, &id).await.0, StatusCode::CONFLICT);
     assert_eq!(h.chunk(&cookie, &id, 0, b"corrupt").await, StatusCode::OK);
-    assert_eq!(h.finish(&cookie, &id).await.0, StatusCode::CONFLICT);
+    assert_eq!(h.finish(&cookie, &id).await.0, StatusCode::OK);
+    h.drain().await;
     let (_, files) = h.json("GET", "/api/live/files", &cookie, Value::Null).await;
-    assert_eq!(files, json!([]));
+    assert_eq!(files[0]["status"], "failed");
+    assert!(
+        files[0]["processing_error"]
+            .as_str()
+            .unwrap()
+            .contains("checksum")
+    );
     let (status, _) = h
         .json(
             "POST",
@@ -460,6 +483,7 @@ async fn upload_survives_reopen_and_uncommitted_disk_tail() {
     assert_eq!(h.chunk(&cookie, &id, 5, b" world").await, StatusCode::OK);
     assert_eq!(h.finish(&cookie, &id).await.0, StatusCode::OK);
     assert_eq!(h.finish(&cookie, &id).await.0, StatusCode::OK);
+    h.drain().await;
     assert_eq!(
         h.request(
             "GET",
@@ -847,6 +871,8 @@ async fn incomplete_imports_require_explicit_repair_and_remain_deletable() {
     for name in &names {
         assert!(dir.join(name).exists());
     }
+    h.drain().await;
+    let (_, files) = h.json("GET", "/api/live/files", &cookie, Value::Null).await;
     // Use hashes to distinguish even raw filenames with the same lossy display name.
     for (i, name) in names.iter().enumerate() {
         let file = files
@@ -941,6 +967,12 @@ async fn publication_recovery_and_expired_upload_cleanup() {
     let (_, files) = h.json("GET", "/api/live/files", &cookie, Value::Null).await;
     assert_eq!(files[0]["id"], id);
     assert_eq!(h.finish(&cookie, &id).await.0, StatusCode::OK);
+    assert_eq!(files[0]["status"], "processing");
+    assert!(storage::upload_path(&h.app, &id).exists());
+    // Maintenance must leave queued recovery cleanup to the worker pool.
+    storage::maintenance(&h.app).await.unwrap();
+    assert!(storage::upload_path(&h.app, &id).exists());
+    h.drain().await;
     assert!(!storage::upload_path(&h.app, &id).exists());
     let stale = h.start(&cookie, "stale", b"pending").await;
     sqlx::query("UPDATE uploads SET updated_at = 0")
@@ -1200,4 +1232,347 @@ async fn imprint_disabled_shows_private_even_when_example_exists() {
         h.request("GET", "/imprint", "", vec![], &[]).await.0,
         StatusCode::NOT_FOUND
     );
+}
+
+#[tokio::test]
+async fn processing_queue_is_durable_fair_and_restricts_operations() {
+    let mut h = Harness::new().await;
+    let a = h.seed("Alice", 1000).await;
+    let b = h.seed("Bob", 1000).await;
+    for name in ["one", "two", "three"] {
+        std::fs::write(
+            h.app.settings.data_dir.join("users/Alice").join(name),
+            b"abc",
+        )
+        .unwrap();
+    }
+    std::fs::write(h.app.settings.data_dir.join("users/Bob/one"), b"abc").unwrap();
+    let (_, files) = h.json("GET", "/api/live/files", &a, Value::Null).await;
+    assert!(
+        files
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["status"] == "processing" && f["sha256"] == "")
+    );
+    h.json("GET", "/api/live/files", &b, Value::Null).await;
+    let id = files[0]["id"].as_str().unwrap();
+    let path = format!("/api/live/files/{id}");
+    for (method, suffix, body) in [
+        ("GET", "/content", Value::Null),
+        ("GET", "/links", Value::Null),
+        ("POST", "/links", json!({})),
+        ("PATCH", "", json!({"name":"renamed"})),
+    ] {
+        assert_eq!(
+            h.json(method, &format!("{path}{suffix}"), &a, body).await.0,
+            StatusCode::CONFLICT
+        );
+    }
+    assert_eq!(
+        h.json("DELETE", &path, &b, Value::Null).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        h.json("DELETE", &path, &a, Value::Null).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    h.app.db.close().await;
+    h.app = App::open(h.app.settings.clone()).await.unwrap();
+    h.router = routes::router(h.app.clone());
+    let mut active = std::collections::HashSet::new();
+    let first = amalthea::processing::next(&h.app, 0, &active)
+        .await
+        .unwrap()
+        .unwrap();
+    active.insert(first.id.clone());
+    let second = amalthea::processing::next(&h.app, first.user_id, &active)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(first.user_id, second.user_id);
+    active.insert(second.id.clone());
+    let third = amalthea::processing::next(&h.app, second.user_id, &active)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(third.user_id, first.user_id);
+    h.drain().await;
+    let (_, files) = h.json("GET", "/api/live/files", &a, Value::Null).await;
+    assert_eq!(files.as_array().unwrap().len(), 2);
+    assert!(
+        files
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["status"] == "ready" && f["sha256"] == model::hash(b"abc"))
+    );
+}
+
+#[tokio::test]
+async fn processing_failure_retry_and_deleted_job_cannot_resurrect_file() {
+    let h = Harness::new().await;
+    let cookie = h.seed("Alice", 100).await;
+    std::fs::write(h.app.settings.data_dir.join("users/Alice/a"), b"abc").unwrap();
+    h.json("GET", "/api/live/files", &cookie, Value::Null).await;
+    let file = amalthea::processing::next(&h.app, 0, &Default::default())
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query(
+        "UPDATE files SET status = 'failed', processing_error = 'Temporary failure' WHERE id = ?",
+    )
+    .bind(&file.id)
+    .execute(&h.app.db)
+    .await
+    .unwrap();
+    let path = format!("/api/live/files/{}", file.id);
+    assert_eq!(
+        h.json("POST", &format!("{path}/retry"), &cookie, Value::Null)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    h.drain().await;
+    let (_, ready) = h.json("GET", &path, &cookie, Value::Null).await;
+    assert_eq!(ready["status"], "ready");
+    assert!(ready["processing_error"].is_null());
+    assert_eq!(
+        h.json("POST", &format!("{path}/retry"), &cookie, Value::Null)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        h.json("DELETE", &path, &cookie, Value::Null).await.0,
+        StatusCode::NO_CONTENT
+    );
+    // Simulate a previously dispatched worker completing after deletion.
+    amalthea::processing::process(&h.app, &file, tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        h.json("GET", &path, &cookie, Value::Null).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn worker_limit_and_cancellation_keep_service_responsive() {
+    use std::time::Duration;
+    let h = Harness::new().await;
+    let cookie = h.seed("Alice", 1024 * 1024 * 1024).await;
+    for name in ["a", "b", "c", "d"] {
+        std::fs::File::create(h.app.settings.data_dir.join("users/Alice").join(name))
+            .unwrap()
+            .set_len(128 * 1024 * 1024)
+            .unwrap();
+    }
+    let (_, files) = tokio::time::timeout(
+        Duration::from_secs(2),
+        h.json("GET", "/api/live/files", &cookie, Value::Null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(files.as_array().unwrap().len(), 4);
+    let dispatcher = amalthea::processing::start(h.app.clone());
+    let running = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let running = h.app.processing.lock().unwrap().clone();
+            assert!(running.len() <= h.app.settings.processing_workers);
+            if running.len() == h.app.settings.processing_workers {
+                break running;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // This request takes the same mutation lock that hashing used to monopolize.
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            h.json("GET", "/api/live/me", &cookie, Value::Null)
+        )
+        .await
+        .unwrap()
+        .0,
+        StatusCode::OK
+    );
+    let (id, token) = running.iter().next().unwrap();
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            h.json(
+                "DELETE",
+                &format!("/api/live/files/{id}"),
+                &cookie,
+                Value::Null
+            )
+        )
+        .await
+        .unwrap()
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert!(token.is_cancelled());
+    dispatcher.abort();
+    let _ = dispatcher.await;
+    for token in running.values() {
+        token.cancel();
+    }
+}
+
+#[tokio::test]
+async fn separate_uploads_write_without_the_global_lock_and_status_is_lock_free() {
+    use std::time::Duration;
+    let h = Harness::new().await;
+    let cookie = h.seed("Alice", 100).await;
+    let a = h.start(&cookie, "a", b"abc").await;
+    let b = h.start(&cookie, "b", b"xyz").await;
+    let upload_guard = h.app.lock_upload(&a).await;
+    let metadata_guard = h.app.mutation.lock().await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), h.chunk(&cookie, &b, 0, b"xyz"))
+            .await
+            .unwrap(),
+        StatusCode::OK
+    );
+    let (status, body) = tokio::time::timeout(
+        Duration::from_secs(2),
+        h.json(
+            "GET",
+            &format!("/api/live/uploads/{a}"),
+            &cookie,
+            Value::Null,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["offset"], 0);
+    drop(metadata_guard);
+    // Cancellation waiting for A must not monopolize metadata access.
+    let path = format!("/api/live/uploads/{a}");
+    let cancel = h.json("DELETE", &path, &cookie, Value::Null);
+    tokio::pin!(cancel);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut cancel)
+            .await
+            .is_err()
+    );
+    drop(
+        tokio::time::timeout(Duration::from_secs(2), h.app.mutation.lock())
+            .await
+            .unwrap(),
+    );
+    drop(upload_guard);
+    assert_eq!(cancel.await.0, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn chunks_serialize_per_upload_and_survive_disconnected_requests() {
+    use std::time::Duration;
+    let h = Harness::new().await;
+    let cookie = h.seed("Alice", 100).await;
+    let id = h.start(&cookie, "a", b"abc").await;
+    let (first, second) = tokio::join!(
+        h.chunk(&cookie, &id, 0, b"abc"),
+        h.chunk(&cookie, &id, 0, b"abc")
+    );
+    assert!(
+        (first == StatusCode::OK && second == StatusCode::CONFLICT)
+            || (second == StatusCode::OK && first == StatusCode::CONFLICT)
+    );
+    assert_eq!(
+        std::fs::read(storage::upload_path(&h.app, &id)).unwrap(),
+        b"abc"
+    );
+
+    let id = h.start(&cookie, "b", b"xyz").await;
+    let guard = h.app.lock_upload(&id).await;
+    // Dropping the request after it queues its write simulates disconnect.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), h.chunk(&cookie, &id, 0, b"xyz"))
+            .await
+            .is_err()
+    );
+    drop(guard);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let (_, state) = h
+                .json(
+                    "GET",
+                    &format!("/api/live/uploads/{id}"),
+                    &cookie,
+                    Value::Null,
+                )
+                .await;
+            if state["offset"] == 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read(storage::upload_path(&h.app, &id)).unwrap(),
+        b"xyz"
+    );
+}
+
+#[tokio::test]
+async fn recovery_job_resumes_after_cleanup_crash_and_can_be_deleted() {
+    let mut h = Harness::new().await;
+    let cookie = h.seed("Alice", 100).await;
+    let id = h.start(&cookie, "a", b"abc").await;
+    h.chunk(&cookie, &id, 0, b"abc").await;
+    std::fs::hard_link(
+        storage::upload_path(&h.app, &id),
+        h.app.settings.data_dir.join("users/Alice/a"),
+    )
+    .unwrap();
+    storage::maintenance(&h.app).await.unwrap();
+    // Crash after unlinking the temporary name, before marking the job ready.
+    std::fs::remove_file(storage::upload_path(&h.app, &id)).unwrap();
+    h.app.db.close().await;
+    h.app = App::open(h.app.settings.clone()).await.unwrap();
+    h.router = routes::router(h.app.clone());
+    storage::maintenance(&h.app).await.unwrap();
+    let (_, files) = h.json("GET", "/api/live/files", &cookie, Value::Null).await;
+    assert_eq!(files[0]["id"], id);
+    assert_eq!(files[0]["status"], "processing");
+    h.drain().await;
+    let (_, ready) = h
+        .json(
+            "GET",
+            &format!("/api/live/files/{id}"),
+            &cookie,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["sha256"], model::hash(b"abc"));
+
+    let id = h.start(&cookie, "b", b"abc").await;
+    h.chunk(&cookie, &id, 0, b"abc").await;
+    let destination = h.app.settings.data_dir.join("users/Alice/b");
+    std::fs::hard_link(storage::upload_path(&h.app, &id), &destination).unwrap();
+    storage::maintenance(&h.app).await.unwrap();
+    assert!(storage::upload_path(&h.app, &id).exists());
+    assert_eq!(
+        h.json(
+            "DELETE",
+            &format!("/api/live/files/{id}"),
+            &cookie,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert!(!destination.exists());
+    assert!(!storage::upload_path(&h.app, &id).exists());
 }

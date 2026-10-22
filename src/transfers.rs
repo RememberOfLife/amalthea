@@ -115,7 +115,6 @@ pub async fn status(
     headers: HeaderMap,
 ) -> Result<Json<Upload>> {
     let user = auth::user(&app, &headers).await?;
-    let _guard = app.mutation.lock().await;
     let upload = owned_upload(&app, &user, &id).await?;
     Ok(Json(upload))
 }
@@ -147,46 +146,58 @@ pub async fn chunk(
         .get("upload-checksum")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| Error::bad("Upload-Checksum (SHA-256) is required"))?;
-    if bytes.is_empty() || bytes.len() > CHUNK_BYTES || model::hash(&bytes) != hash {
+    if bytes.is_empty() || bytes.len() > CHUNK_BYTES {
         return Err(Error::bad("Chunk size or checksum is invalid"));
     }
-    let _guard = app.mutation.lock().await;
-    let upload = owned_upload(&app, &user, &id).await?;
-    if offset != upload.offset || bytes.len() as i64 > upload.size - offset {
-        return Err(Error::conflict(
-            "Offset differs from server state; fetch upload status before resuming",
-        ));
+    let checksum_bytes = bytes.clone();
+    let checksum = tokio::task::spawn_blocking(move || model::hash(&checksum_bytes)).await?;
+    if checksum != hash {
+        return Err(Error::bad("Chunk size or checksum is invalid"));
     }
-    let path = storage::upload_path(&app, &id);
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    if !file.metadata()?.is_file() || file.metadata()?.len() < offset as u64 {
-        return Err(Error::conflict(
-            "Partial upload is missing bytes; cancel and restart it",
-        ));
-    }
-    let mut file = tokio::fs::File::from_std(file);
-    // The committed DB offset is authoritative after an interrupted write.
-    file.set_len(offset as u64).await?;
-    file.seek(std::io::SeekFrom::Start(offset as u64)).await?;
-    file.write_all(&bytes).await?;
-    file.sync_all().await?;
-    sqlx::query("UPDATE uploads SET offset = ?, updated_at = ? WHERE id = ?")
-        .bind(offset + bytes.len() as i64)
-        .bind(model::now())
-        .bind(&id)
-        .execute(&app.db)
-        .await?;
-    Ok(Json(owned_upload(&app, &user, &id).await?))
+    // A disconnected request must not release its lock while filesystem writes
+    // are still in flight. The task owns the lock through fsync and offset commit.
+    tokio::spawn(async move {
+        let _guard = app.lock_upload(&id).await;
+        let upload = owned_upload(&app, &user, &id).await?;
+        if offset != upload.offset || bytes.len() as i64 > upload.size - offset {
+            return Err(Error::conflict(
+                "Offset differs from server state; fetch upload status before resuming",
+            ));
+        }
+        let path = storage::upload_path(&app, &id);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?;
+        if !file.metadata()?.is_file() || file.metadata()?.len() < offset as u64 {
+            return Err(Error::conflict(
+                "Partial upload is missing bytes; cancel and restart it",
+            ));
+        }
+        let mut file = tokio::fs::File::from_std(file);
+        // The committed DB offset is authoritative after an interrupted write.
+        file.set_len(offset as u64).await?;
+        file.seek(std::io::SeekFrom::Start(offset as u64)).await?;
+        file.write_all(&bytes).await?;
+        file.sync_all().await?;
+        sqlx::query("UPDATE uploads SET offset = ?, updated_at = ? WHERE id = ?")
+            .bind(offset + bytes.len() as i64)
+            .bind(model::now())
+            .bind(&id)
+            .execute(&app.db)
+            .await?;
+        Ok(Json(owned_upload(&app, &user, &id).await?))
+    })
+    .await?
 }
+
 pub async fn cancel(
     AxumState(app): AxumState<State>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<StatusCode> {
     let user = auth::user(&app, &headers).await?;
+    let _upload_guard = app.lock_upload(&id).await;
     let _guard = app.mutation.lock().await;
     owned_upload(&app, &user, &id).await?;
     storage::remove_if_exists(&storage::upload_path(&app, &id)).await?;
@@ -202,8 +213,13 @@ pub async fn finish(
     headers: HeaderMap,
 ) -> Result<Json<FileRecord>> {
     let user = auth::user(&app, &headers).await?;
+    {
+        let _guard = app.mutation.lock().await;
+        storage::reconcile_user(&app, &user).await?;
+    }
+    let _upload_guard = app.lock_upload(&id).await;
     let _guard = app.mutation.lock().await;
-    // Retrying a lost completion response must not publish twice.
+    // Reconciliation may have recovered an interrupted publication.
     if let Some(file) = sqlx::query_as("SELECT * FROM files WHERE id = ? AND user_id = ?")
         .bind(&id)
         .bind(user.id)
@@ -216,21 +232,10 @@ pub async fn finish(
     if upload.offset != upload.size {
         return Err(Error::conflict("Upload is not complete"));
     }
-    storage::reconcile_user(&app, &user).await?;
-    // Reconciliation may have recovered an interrupted publication.
-    if let Some(file) = sqlx::query_as("SELECT * FROM files WHERE id = ? AND user_id = ?")
-        .bind(&id)
-        .bind(user.id)
-        .fetch_optional(&app.db)
-        .await?
-    {
-        return Ok(Json(file));
-    }
     let path = storage::upload_path(&app, &id);
-    let (size, hash, _) = storage::digest_file(path.clone()).await?;
-    if size != upload.size || hash != upload.sha256 {
+    if storage::open_regular(&path)?.metadata()?.len() != upload.size as u64 {
         return Err(Error::conflict(
-            "Complete file checksum does not match; cancel and upload again",
+            "Upload size changed; cancel and upload again",
         ));
     }
     let directory = storage::user_dir(&app, &user)?;
@@ -269,8 +274,8 @@ pub async fn finish(
     storage::remove_if_exists(&path).await?;
     std::fs::File::open(app.settings.data_dir.join("uploads"))?.sync_all()?;
     let disk_stamp = storage::stamp(&tokio::fs::metadata(&destination).await?);
-    sqlx::query("INSERT INTO files (id, user_id, name, size, sha256, disk_stamp, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .bind(&id).bind(user.id).bind(&upload.name).bind(size).bind(hash).bind(disk_stamp).bind(model::now()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO files (id, user_id, name, size, sha256, disk_stamp, created_at, status, expected_sha256) VALUES (?, ?, ?, ?, '', ?, ?, 'processing', ?)")
+        .bind(&id).bind(user.id).bind(&upload.name).bind(upload.size).bind(disk_stamp).bind(model::now()).bind(&upload.sha256).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM uploads WHERE id = ?")
         .bind(&id)
         .execute(&mut *tx)

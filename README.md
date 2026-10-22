@@ -52,7 +52,7 @@ uploads are blocked when usage plus reservations exceeds the quota.
   there to reclaim space. Saving a copy does not clear this storage. Browser storage
   limits apply; clearing site data or using private browsing can remove it.
   Direct browser downloads are also available.
-- Files are checked with SHA-256 before publication and after resumable download.
+- Files are checked with SHA-256 in background workers before downloads or sharing are enabled, and after resumable download.
   Transfers use bounded memory, including files larger than 16 GiB.
 
 Use a current Firefox or Chrome over HTTPS; localhost HTTP also supports the
@@ -84,3 +84,27 @@ systemctl --user start amalthea
 # From dev pc to a servers install installed:
 ./deploy.sh user@hostname /absolute/install/path
 ```
+
+File discovery immediately records metadata with a `processing` status; hashing runs
+outside the service mutation lock. Uploaded files enter the same durable queue.
+Processing and failed files count toward quota and can be deleted, but cannot be
+renamed, downloaded, or shared. Failed jobs show an error and offer a retry.
+Interrupted jobs resume when the server restarts. The file list refreshes every
+two seconds; filesystem discovery also runs at `reconcile_seconds` intervals.
+
+Set `processing_workers` (default 2, range 1–256) to cap concurrent processing jobs
+across the platform. Dispatch rotates through users with pending work, choosing
+their oldest queued file on each turn. Running jobs are not preempted; idle slots
+can all serve one user when nobody else has queued work.
+
+Upload verification and interrupted publication recovery share this worker pool.
+Recovery cleanup is durable and idempotent, including a restart after unlinking
+the temporary file. Unfinished uploads still resume from their committed offsets.
+
+Independent uploads write chunks and sync to disk concurrently. A per-upload lock
+protects each upload's bytes and committed offset through completion, cancellation,
+and expiry. Read-only upload status uses the database without a mutation lock.
+The global mutation lock remains for operations spanning filesystem names and
+database metadata (reservation, publication, deletion and reconciliation); SQLite
+transactions alone cannot make those filesystem changes atomic. Nothing waits
+for a busy upload while holding that global lock.

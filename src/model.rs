@@ -57,6 +57,10 @@ pub struct FileRecord {
     pub size: i64,
     pub sha256: String,
     pub disk_stamp: String,
+    pub status: String,
+    pub processing_error: Option<String>,
+    pub expected_sha256: Option<String>,
+    pub cleanup_upload: bool,
     pub created_at: i64,
 }
 // SQLite names normally contain the literal UTF-8 filename. A NUL prefix (which
@@ -79,7 +83,14 @@ impl FileRecord {
             None => Ok(self.name.clone().into()),
         }
     }
+    pub fn require_ready(&self) -> crate::error::Result<()> {
+        if self.status != "ready" {
+            return Err(crate::error::Error::conflict("File is not ready"));
+        }
+        Ok(())
+    }
     pub fn require_complete(&self) -> crate::error::Result<()> {
+        self.require_ready()?;
         if valid_name(&self.name) {
             Ok(())
         } else {
@@ -95,7 +106,9 @@ impl Serialize for FileRecord {
         let name = self
             .disk_name()
             .map_err(|error| serde::ser::Error::custom(error.1))?;
-        let mut record = serializer.serialize_struct("FileRecord", 7)?;
+        let mut record = serializer.serialize_struct("FileRecord", 9)?;
+        record.serialize_field("status", &self.status)?;
+        record.serialize_field("processing_error", &self.processing_error)?;
         record.serialize_field("id", &self.id)?;
         record.serialize_field("user_id", &self.user_id)?;
         record.serialize_field("name", &name.to_string_lossy())?;

@@ -96,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
             storage::maintenance(&app)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.1))?;
+            let processing = amalthea::processing::start(app.clone());
             let background_app = app.clone();
             let maintenance = tokio::spawn(async move {
                 loop {
@@ -118,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .await?;
             maintenance.abort();
+            processing.abort();
             drop(lock);
         }
         Command::User { command } => match command {

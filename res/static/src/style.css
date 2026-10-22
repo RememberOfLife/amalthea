@@ -45,11 +45,7 @@ body {
     outline-offset: 4px;
 }
 .brand-logo {
-    display: block;
-    width: 144px;
     height: 72px;
-    object-fit: contain;
-    flex-shrink: 0;
 }
 .header-account {
     min-width: 0;
@@ -65,7 +61,6 @@ body {
         font-size: 1.2rem;
     }
     .brand-logo {
-        width: 112px;
         height: 56px;
     }
 }

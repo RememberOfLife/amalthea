@@ -19,7 +19,31 @@ pub struct Settings {
     pub session_days: i64,
     pub upload_expiry_days: i64,
     pub reconcile_seconds: u64,
+    #[serde(deserialize_with = "deserialize_workers")]
+    pub processing_workers: usize,
     pub access_log_days: i64,
+}
+
+fn deserialize_workers<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<usize, D::Error> {
+    struct Workers;
+    impl serde::de::Visitor<'_> for Workers {
+        type Value = usize;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("an integer worker count between 1 and 256")
+        }
+        fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<usize, E> {
+            if !(1..=256).contains(&value) {
+                return Err(E::custom("processing_workers must be between 1 and 256"));
+            }
+            Ok(value as usize)
+        }
+        fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<usize, E> {
+            self.visit_i64(i64::try_from(value).map_err(E::custom)?)
+        }
+    }
+    deserializer.deserialize_any(Workers)
 }
 
 fn deserialize_quota<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
@@ -59,6 +83,7 @@ impl Default for Settings {
             session_days: 30,
             upload_expiry_days: 30,
             reconcile_seconds: 60,
+            processing_workers: 2,
             access_log_days: 90,
         }
     }
@@ -80,10 +105,10 @@ impl Settings {
         if value.static_dir.is_relative() {
             value.static_dir = base.join(&value.static_dir);
         }
-        if let Some(imprint) = &mut value.imprint {
-            if imprint.is_relative() {
-                *imprint = base.join(&*imprint);
-            }
+        if let Some(imprint) = &mut value.imprint
+            && imprint.is_relative()
+        {
+            *imprint = base.join(&*imprint);
         }
         Ok(value)
     }
@@ -113,9 +138,10 @@ impl Settings {
             || !(1..=3650).contains(&self.session_days)
             || !(1..=3650).contains(&self.upload_expiry_days)
             || !(1..=86400).contains(&self.reconcile_seconds)
+            || !(1..=256).contains(&self.processing_workers)
             || !(1..=3650).contains(&self.access_log_days)
         {
-            bail!("invalid quota, retention or reconciliation interval");
+            bail!("invalid quota, retention, reconciliation interval or processing worker count");
         }
         Ok(())
     }
@@ -144,6 +170,20 @@ mod tests {
             .try_deserialize()?;
         settings.validate()?;
         Ok(settings)
+    }
+
+    #[test]
+    fn processing_pool_is_bounded() {
+        assert_eq!(read("{}").unwrap().processing_workers, 2);
+        assert_eq!(
+            read(r#"{"processing_workers":4}"#)
+                .unwrap()
+                .processing_workers,
+            4
+        );
+        for value in ["0", "257", "-1", "1.5"] {
+            assert!(read(&format!(r#"{{"processing_workers":{value}}}"#)).is_err());
+        }
     }
 
     #[test]

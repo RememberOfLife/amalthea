@@ -9,5 +9,6 @@
   "session_days": 30,
   "upload_expiry_days": 30,
   "reconcile_seconds": 60,
-  "access_log_days": 90
+  "access_log_days": 90,
+  "processing_workers": 2
 }

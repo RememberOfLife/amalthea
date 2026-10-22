@@ -63,9 +63,14 @@ function App() {
     accountRefresh = accountRefresh.then(read, read);
     return accountRefresh;
   };
+  let fileRefresh = Promise.resolve();
+  const refreshFiles = () => {
+    const read = async () => { const rows = await api('/files'); setFiles(rows); };
+    fileRefresh = fileRefresh.then(read, read);
+    return fileRefresh;
+  };
   const refresh = async () => {
-    const [account, rows] = await Promise.all([refreshAccount(), api('/files')]);
-    setFiles(rows);
+    const [account] = await Promise.all([refreshAccount(), refreshFiles()]);
     const owner = `user:${account.user.id}`;
     setScope(owner);
     await restoreUploads(owner);
@@ -86,6 +91,14 @@ function App() {
     } catch (e) { if (e.status !== 401 || token) setError(e.message); }
     finally { setLoading(false); }
   });
+  let polling = false;
+  const filePoll = setInterval(async () => {
+    if (!me() || token || polling) return;
+    polling = true;
+    try { await refreshFiles(); } catch (_) { /* Manual refresh reports errors. */ }
+    finally { polling = false; }
+  }, 2000);
+  onCleanup(() => clearInterval(filePoll));
   const offline = () => setNotice('Connection lost. Resume transfers when you are back online.');
   onMount(() => window.addEventListener('offline', offline));
   onCleanup(() => { pauseAll(); window.removeEventListener('offline', offline); });
@@ -96,7 +109,7 @@ function App() {
   return html`
     <header class="site-header border-bottom"><nav class="container py-2 d-flex flex-wrap justify-content-between align-items-center gap-3" aria-label="Main">
       <a class="brand" href=${`${base}/`}>
-        <img class="brand-logo" src=${`${base}/res/static/images/amalthea.webp`} alt="" width="144" height="72">
+        <img class="brand-logo d-block w-auto flex-shrink-0 pe-1" src=${`${base}/res/static/images/amalthea.webp`} alt="" width="1103" height="875">
         <span>Amalthea</span>
       </a>
       <${Show} when=${me}><div class="header-account d-flex align-items-center gap-3"><span class="header-username">${() => me()?.user.username}</span><button class="btn btn-sm btn-outline-secondary flex-shrink-0" onClick=${() => run(async () => { pauseAll(); await api('/logout', { method: 'POST' }); location.assign(`${base}/login`); })}>Sign out</button></div><//>
@@ -138,11 +151,12 @@ function App() {
           <label class="visually-hidden" for="filter">Filter files</label><input id="filter" class="form-control mb-3" type="search" placeholder="Filter files…" value=${filter} onInput=${e => setFilter(e.currentTarget.value)}/>
           <div class="file-list mb-4"><${For} each=${() => files().filter(f => f.name.toLowerCase().includes(filter().toLowerCase()))} fallback=${html`<p class="text-body-secondary py-3">No matching files.</p>`}>
             ${file => html`<article class="file-row border-bottom py-3">
-              <div class="file-info"><h2 class="h6 filename mb-1">${file.name}</h2><span class="small text-body-secondary">${bytes(file.size)}</span><p class="small text-warning-emphasis mb-0" hidden=${!file.incomplete}>Incomplete — needs a valid filename.</p></div>
-              <div class="d-flex gap-2 flex-wrap"><button class="btn btn-sm btn-outline-primary" disabled=${file.incomplete || !capable()} onClick=${() => doDownload(file)}>Download</button>
-                <a class="btn btn-sm btn-outline-secondary" hidden=${file.incomplete} href=${endpoint(`/files/${file.id}/content`)} title="Use the browser's normal download manager">Direct</a>
-                <button class="btn btn-sm btn-outline-secondary" disabled=${file.incomplete} onClick=${() => setShareFile(file)}>Share</button>
-                <button class="btn btn-sm btn-outline-secondary" onClick=${() => setRenameFile(file)}>${file.incomplete ? 'Fix name' : 'Rename'}</button>
+              <div class="file-info"><h2 class="h6 filename mb-1">${file.name}</h2><span class="small text-body-secondary">${bytes(file.size)}</span><p class="small mb-0" hidden=${file.status === 'ready'}>${file.status === 'processing' ? 'Processing…' : file.processing_error || 'Processing failed'}</p><p class="small text-warning-emphasis mb-0" hidden=${!file.incomplete}>Incomplete — needs a valid filename.</p></div>
+              <div class="d-flex gap-2 flex-wrap"><button class="btn btn-sm btn-outline-primary" disabled=${file.status !== 'ready' || file.incomplete || !capable()} onClick=${() => doDownload(file)}>Download</button>
+                <a class="btn btn-sm btn-outline-secondary" hidden=${file.status !== 'ready' || file.incomplete} href=${endpoint(`/files/${file.id}/content`)} title="Use the browser's normal download manager">Direct</a>
+                <button class="btn btn-sm btn-outline-secondary" disabled=${file.status !== 'ready' || file.incomplete} onClick=${() => setShareFile(file)}>Share</button>
+                <button class="btn btn-sm btn-outline-secondary" disabled=${file.status !== 'ready'} onClick=${() => setRenameFile(file)}>${file.incomplete ? 'Fix name' : 'Rename'}</button>
+                <button class="btn btn-sm btn-outline-secondary" hidden=${file.status !== 'failed'} onClick=${() => run(async () => { await api(`/files/${file.id}/retry`, { method: 'POST' }); await refresh(); })}>Retry processing</button>
                 <button class="btn btn-sm btn-outline-danger" onClick=${() => setDeleteFile(file)}>Delete</button>
               </div></article>`}
           <//></div>
