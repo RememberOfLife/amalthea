@@ -65,9 +65,12 @@ function App() {
     await download(file, token ? `/public/${token}/content` : `/files/${file.id}/content`, scope());
   });
   return html`
-    <header class="border-bottom"><nav class="container py-3 d-flex justify-content-between align-items-center gap-3" aria-label="Main">
-      <a class="brand" href=${`${base}/`}>Amalthea</a>
-      <${Show} when=${me}><div class="d-flex align-items-center gap-3"><span>${() => me()?.user.username}</span><button class="btn btn-sm btn-outline-secondary" onClick=${() => run(async () => { pauseAll(); await api('/logout', { method: 'POST' }); location.assign(`${base}/login`); })}>Sign out</button></div><//>
+    <header class="site-header border-bottom"><nav class="container py-2 d-flex flex-wrap justify-content-between align-items-center gap-3" aria-label="Main">
+      <a class="brand" href=${`${base}/`}>
+        <img class="brand-logo" src=${`${base}/res/static/images/amalthea.webp`} alt="" width="144" height="72">
+        <span>Amalthea</span>
+      </a>
+      <${Show} when=${me}><div class="header-account d-flex align-items-center gap-3"><span class="header-username">${() => me()?.user.username}</span><button class="btn btn-sm btn-outline-secondary flex-shrink-0" onClick=${() => run(async () => { pauseAll(); await api('/logout', { method: 'POST' }); location.assign(`${base}/login`); })}>Sign out</button></div><//>
     </nav></header>
     <main class="container py-4">
       ${alert}

@@ -65,6 +65,8 @@ async fn main() -> anyhow::Result<()> {
                 .context("another server is already using this data directory")?;
             for asset in [
                 "index.html",
+                "images/favicon.png",
+                "images/amalthea.webp",
                 "src/main.js",
                 "src/api.js",
                 "src/transfers.js",

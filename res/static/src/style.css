@@ -1,7 +1,17 @@
 :root { --bs-primary: #315a8a; }
 body { background: #fafbfc; color: #202833; }
 .container { max-width: 1080px; }
-.brand { color: inherit; font-size: 1.25rem; font-weight: 650; text-decoration: none; }
+.site-header { background: linear-gradient(110deg, #fff7e6, #fff 65%); }
+.brand { display: inline-flex; align-items: center; gap: .25rem; color: #0b1c3d; font-size: 1.4rem; font-weight: 650; letter-spacing: -.025em; text-decoration: none; border-radius: .5rem; }
+.brand:hover { color: #315a8a; }
+.brand:focus-visible { outline: 3px solid #315a8a; outline-offset: 4px; }
+.brand-logo { display: block; width: 144px; height: 72px; object-fit: contain; flex-shrink: 0; }
+.header-account { min-width: 0; max-width: 100%; margin-left: auto; }
+.header-username { overflow-wrap: anywhere; min-width: 0; }
+@media (max-width: 575px) {
+  .brand { font-size: 1.2rem; }
+  .brand-logo { width: 112px; height: 56px; }
+}
 .auth { max-width: 420px; padding: 1rem 0 4rem; }
 .filename { overflow-wrap: anywhere; word-break: break-word; }
 .file-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
