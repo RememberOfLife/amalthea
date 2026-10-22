@@ -11,6 +11,33 @@ const date = seconds => seconds ? new Date(seconds * 1000).toLocaleString() : 'N
 const capable = () => !!(window.isSecureContext && navigator.storage?.getDirectory && navigator.locks);
 const alert = () => error() && html`<div class="alert alert-danger" role="alert">${error}<button class="btn-close float-end" aria-label="Dismiss error" onClick=${() => setError('')}></button></div>`;
 
+function storageQuota(account) {
+  const used = account.used_bytes;
+  const reserved = account.reserved_bytes;
+  const quota = account.user.quota_bytes;
+  const total = used + reserved;
+  const free = Math.max(0, quota - total);
+  const over = Math.max(0, total - quota);
+  const scale = Math.max(quota, total, 1);
+  // Make room for the excess without changing the used-to-reserved ratio.
+  const withinQuota = total > quota ? quota / total : 1;
+  const summary = `${bytes(used)} used · ${bytes(reserved)} reserved · ${bytes(quota)} quota`;
+  const segments = [
+    { label: 'Used', value: used, width: used * withinQuota, color: 'bg-primary' },
+    { label: 'Reserved', value: reserved, width: reserved * withinQuota, color: 'bg-info text-dark' },
+    { label: 'Free', value: free, width: free, color: 'bg-success' },
+    { label: 'Over quota', value: over, width: over, color: 'bg-danger' },
+  ];
+  return html`
+    <p class="mt-3 mb-1">${summary}</p>
+    <div class="progress" role="img" aria-label=${`${summary} · ${bytes(free)} free · ${bytes(over)} over quota`}>
+      ${segments.filter(segment => segment.width > 0).map(segment => html`
+        <div class=${`progress-bar ${segment.color}`} style=${`width: ${segment.width / scale * 100}%`} title=${`${bytes(segment.value)} ${segment.label.toLowerCase()}`} aria-hidden="true">${segment.label}</div>
+      `)}
+    </div>
+  `;
+}
+
 function App() {
   const [me, setMe] = createSignal();
   const [files, setFiles] = createSignal([]);
@@ -94,9 +121,8 @@ function App() {
         <${Show} when=${me}>
           <section class="mb-4" aria-label="Storage quota">
             <div class="d-flex justify-content-between align-items-center flex-wrap gap-2"><h1 class="h3 mb-0">Your files</h1><button class="btn btn-sm btn-outline-secondary" onClick=${() => run(refresh)}><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button></div>
-            <p class="mt-3 mb-1">${() => me() && `${bytes(me().used_bytes)} used · ${bytes(me().reserved_bytes)} reserved · ${bytes(me().user.quota_bytes)} quota`}</p>
-            <progress class="quota" max=${() => Math.max(1, me()?.user.quota_bytes || 0)} value=${() => (me()?.used_bytes || 0) + (me()?.reserved_bytes || 0)} aria-label="Storage used and reserved"></progress>
-            ${() => me() && me().used_bytes + me().reserved_bytes > me().user.quota_bytes && html`<p class="text-danger">You are over quota. Delete files or cancel unfinished uploads to free space.</p>`}
+            ${() => me() && storageQuota(me())}
+            ${() => me() && me().used_bytes + me().reserved_bytes > me().user.quota_bytes && html`<p class="text-danger">You are ${() => bytes(me().used_bytes + me().reserved_bytes - me().user.quota_bytes)} over quota. Delete files or cancel unfinished uploads to free space.</p>`}
           </section>
           <section class="card card-body mb-4" aria-labelledby="upload-title">
             <h2 id="upload-title" class="h5">Upload a file</h2>
