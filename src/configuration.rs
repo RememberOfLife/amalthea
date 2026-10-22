@@ -12,6 +12,7 @@ pub struct Settings {
     pub listen: SocketAddr,
     pub data_dir: PathBuf,
     pub static_dir: PathBuf,
+    pub imprint: Option<PathBuf>,
     pub loglevel: String,
     #[serde(deserialize_with = "deserialize_quota")]
     pub default_quota_bytes: i64,
@@ -52,6 +53,7 @@ impl Default for Settings {
             listen: "127.0.0.1:8080".parse().expect("constant address"),
             data_dir: "data".into(),
             static_dir: "res/static".into(),
+            imprint: None,
             loglevel: "info".into(),
             default_quota_bytes: 100 * 1024 * 1024 * 1024,
             session_days: 30,
@@ -77,6 +79,11 @@ impl Settings {
         }
         if value.static_dir.is_relative() {
             value.static_dir = base.join(&value.static_dir);
+        }
+        if let Some(imprint) = &mut value.imprint {
+            if imprint.is_relative() {
+                *imprint = base.join(&*imprint);
+            }
         }
         Ok(value)
     }
@@ -137,6 +144,16 @@ mod tests {
             .try_deserialize()?;
         settings.validate()?;
         Ok(settings)
+    }
+
+    #[test]
+    fn imprint_is_optional() {
+        assert!(read("{}").unwrap().imprint.is_none());
+        assert!(read(r#"{"imprint":null}"#).unwrap().imprint.is_none());
+        assert_eq!(
+            read(r#"{"imprint":"imprint.html"}"#).unwrap().imprint,
+            Some(PathBuf::from("imprint.html"))
+        );
     }
 
     #[test]

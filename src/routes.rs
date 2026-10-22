@@ -127,7 +127,20 @@ async fn page(
         ))
         .into_response());
     }
+    let imprint = match &app.settings.imprint {
+        None => None,
+        Some(path) => match tokio::fs::read_to_string(path).await {
+            Ok(content) if !content.trim().is_empty() => Some(content),
+            Ok(_) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        },
+    };
+    if matches!(path, "/imprint" | "/imprint/") && imprint.is_none() {
+        return Err(Error::missing());
+    }
     let valid = path == "/"
+        || matches!(path, "/imprint" | "/imprint/")
         || path == "/login"
         || path == "/register"
         || (parts.len() == 3 && parts[0] == "s");
@@ -162,6 +175,18 @@ async fn page(
     }
     let html = tokio::fs::read_to_string(app.settings.static_dir.join("index.html")).await?;
     let html = html.replace("__AMALTHEA_BASE__", app.settings.prefix());
+    let html = html.replace(
+        "__AMALTHEA_IMPRINT_AVAILABLE__",
+        if imprint.is_some() { "true" } else { "false" },
+    );
+    let html = html.replace(
+        "<!-- AMALTHEA_IMPRINT -->",
+        if path == "/imprint" {
+            imprint.as_deref().unwrap_or("")
+        } else {
+            ""
+        },
+    );
     Ok((
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         if request.method() == Method::HEAD {

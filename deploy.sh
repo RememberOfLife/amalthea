@@ -22,7 +22,7 @@ cleanup() {
 }
 trap cleanup EXIT
 # Explicit allowlist: config, data, git metadata and local reference material are never deployed.
-tar -C "$source_dir" -czf "$archive" Cargo.toml Cargo.lock build.rs src migrations res ops docs LICENSE README.md setup.sh deploy.sh config.json.example
+tar -C "$source_dir" -czf "$archive" Cargo.toml Cargo.lock build.rs src migrations res ops docs LICENSE README.md setup.sh deploy.sh config.json.example imprint.html.example
 remote_archive=$(ssh -- "$host" 'mktemp /tmp/amalthea-deploy.XXXXXXXX.tar.gz')
 [[ $remote_archive =~ ^/tmp/amalthea-deploy\.[a-zA-Z0-9]+\.tar\.gz$ ]] || { echo 'Unexpected remote temporary path.' >&2; remote_archive=''; exit 1; }
 scp -- "$archive" "$host:$remote_archive"
@@ -49,7 +49,7 @@ mv -- "$install_dir/res" "$install_dir/res.previous"
 cp -p -- "$install_dir/bin/amalthea" "$install_dir/bin/amalthea.previous"
 mv -- "$release/res" "$install_dir/res"
 mv -f -- "$release/amalthea" "$install_dir/bin/amalthea"
-for item in Cargo.toml Cargo.lock build.rs src migrations ops docs LICENSE README.md setup.sh deploy.sh config.json.example; do
+for item in Cargo.toml Cargo.lock build.rs src migrations ops docs LICENSE README.md setup.sh deploy.sh config.json.example imprint.html.example; do
     cp -R -- "$release/$item" "$install_dir/"
 done
 systemctl --user start amalthea.service

@@ -1,0 +1,12 @@
+<h1 class="h2">Imprint</h1>
+<h2 class="h4">Responsible Operator</h2>
+<p>
+    Your name
+    <br>
+    Your street and number
+    <br>
+    Your postal code and city
+</p>
+<h2 class="h4">Contact</h2>
+<p>Phone: +1234567890</p>
+<p>Email: <a href="mailto:email@example.com">email@example.com</a></p>

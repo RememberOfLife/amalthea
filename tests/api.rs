@@ -23,6 +23,7 @@ impl Harness {
         let dir = tempfile::tempdir_in(root).unwrap();
         let mut settings = Settings {
             data_dir: dir.path().join("data"),
+            imprint: Some(dir.path().join("imprint.html")),
             static_dir: std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("res/static"),
             webroot: format!("https://example.test{prefix}"),
             ..Settings::default()
@@ -1145,4 +1146,58 @@ async fn cli_accepts_readable_quotas_and_prints_both_units() {
         .await
         .unwrap();
     assert_eq!(quota, 1_610_612_736);
+}
+
+#[tokio::test]
+async fn imprint_fragment_and_private_fallback() {
+    let h = Harness::with_prefix("/share").await;
+    let (_, _, body) = h.request("GET", "/login", "", vec![], &[]).await;
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("name=\"amalthea-imprint\" content=\"false\"")
+    );
+    assert_eq!(
+        h.request("GET", "/imprint", "", vec![], &[]).await.0,
+        StatusCode::NOT_FOUND
+    );
+    std::fs::write(
+        h.app.settings.imprint.as_ref().unwrap(),
+        "<h1>Example operator</h1>",
+    )
+    .unwrap();
+    let (status, _, body) = h.request("GET", "/imprint", "", vec![], &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = String::from_utf8(body).unwrap();
+    assert!(body.contains("<h1>Example operator</h1>"));
+    assert!(body.contains("name=\"amalthea-imprint\" content=\"true\""));
+    assert!(body.contains("/share/res/static/src/main.js"));
+    let (status, headers, _) = h.request("GET", "/imprint/", "", vec![], &[]).await;
+    assert_eq!(status, StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(headers["location"], "/share/imprint");
+    std::fs::write(h.app.settings.imprint.as_ref().unwrap(), "  ").unwrap();
+    assert_eq!(
+        h.request("GET", "/imprint", "", vec![], &[]).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn imprint_disabled_shows_private_even_when_example_exists() {
+    let mut h = Harness::new().await;
+    let mut settings = h.app.settings.clone();
+    settings.imprint = None;
+    h.app = App::open(settings).await.unwrap();
+    h.router = routes::router(h.app.clone());
+    let (status, _, body) = h.request("GET", "/login", "", vec![], &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8(body)
+            .unwrap()
+            .contains("name=\"amalthea-imprint\" content=\"false\"")
+    );
+    assert_eq!(
+        h.request("GET", "/imprint", "", vec![], &[]).await.0,
+        StatusCode::NOT_FOUND
+    );
 }

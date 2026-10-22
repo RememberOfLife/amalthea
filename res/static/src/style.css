@@ -1,5 +1,9 @@
 :root { --bs-primary: #315a8a; }
 body { background: #fafbfc; color: #202833; }
+#app { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.site-footer { margin-top: auto; }
+.site-footer a { font-variant: small-caps; }
+.imprint { max-width: 540px; }
 .container { max-width: 1080px; }
 .site-header { background: linear-gradient(110deg, #fff7e6, #fff 65%); }
 .brand { display: inline-flex; align-items: center; gap: .25rem; color: #0b1c3d; font-size: 1.4rem; font-weight: 650; letter-spacing: -.025em; text-decoration: none; border-radius: .5rem; }

@@ -17,7 +17,7 @@ systemctl --user show-environment >/dev/null || { echo 'A running user systemd m
 mkdir -p -- "$install_dir"
 install_dir=$(cd -- "$install_dir" && pwd -P)
 if [[ "$source_dir" != "$install_dir" ]]; then
-    tar -C "$source_dir" -cf - Cargo.toml Cargo.lock build.rs src migrations res ops docs LICENSE README.md setup.sh deploy.sh config.json.example |
+    tar -C "$source_dir" -cf - Cargo.toml Cargo.lock build.rs src migrations res ops docs LICENSE README.md setup.sh deploy.sh config.json.example imprint.html.example |
         tar -C "$install_dir" -xf -
 fi
 cargo build --release --locked --manifest-path "$install_dir/Cargo.toml" --target-dir "$install_dir/target"

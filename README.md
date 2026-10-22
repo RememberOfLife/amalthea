@@ -70,6 +70,10 @@ Relative paths are resolved beside the config file.
 Data lives in the configured data dir, per user.
 The SQLite database holds all the soft metadata.
 
+*If you are forced to, make sure to edit and enable an appropriate imprint.*
+The config's `imprint` points to an HTML fragment (e.g. `"imprint": "imprint.html"`).
+Set it to `null` or omit it to display PRIVATE without an imprint link.
+
 ```sh
 # TODO On the server, as the service user:
 ./setup.sh /absolute/install/path

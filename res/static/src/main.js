@@ -27,6 +27,7 @@ function App() {
   const path = location.pathname.slice(base.length);
   const token = path.startsWith('/s/') ? path.split('/')[2] : null;
   const registration = path === '/register';
+  const imprint = path === '/imprint' || path === '/imprint/';
   const invitation = location.hash.slice(1);
   // Serialize account reads so an older response cannot overwrite newer quota.
   let accountRefresh = Promise.resolve();
@@ -45,6 +46,7 @@ function App() {
   // Quota refresh failures must not interrupt an otherwise healthy upload.
   configureTransfers(refresh, () => run(refreshAccount));
   onMount(async () => {
+    if (imprint) { document.title = 'Imprint · Amalthea'; setLoading(false); return; }
     try {
       if (token) {
         const file = await api(`/public/${token}`);
@@ -73,6 +75,10 @@ function App() {
       <${Show} when=${me}><div class="header-account d-flex align-items-center gap-3"><span class="header-username">${() => me()?.user.username}</span><button class="btn btn-sm btn-outline-secondary flex-shrink-0" onClick=${() => run(async () => { pauseAll(); await api('/logout', { method: 'POST' }); location.assign(`${base}/login`); })}>Sign out</button></div><//>
     </nav></header>
     <main class="container py-4">
+      <${Show} when=${imprint}>
+        <section class="imprint mx-auto bg-body-secondary p-3" innerHTML=${document.getElementById('imprint-content').innerHTML}></section>
+      <//>
+      <${Show} when=${!imprint}>
       ${alert}
       ${() => notice() && html`<div class="alert alert-info" role="status">${notice}</div>`}
       <${Show} when=${() => !loading()} fallback=${html`<p role="status">Loading…</p>`}>
@@ -118,6 +124,7 @@ function App() {
         <${Transfers} scope=${scope}/>
       <//>
       <${BrowserStorage}/>
+      <//>
     </main>
     <${Show} when=${deleteFile}>${file => html`<${Modal} title="Permanently delete file?" close=${_ => setDeleteFile()}>
       <p><strong class="filename">${() => file().name}</strong> and all its sharing links will be removed. There is no trash or undo.</p>
@@ -125,7 +132,16 @@ function App() {
     <//>`}<//>
     <${Show} when=${renameFile}>${file => html`<${RenameModal} file=${file()} close=${_ => setRenameFile()} refresh=${_ => refresh()}/>`}<//>
     <${Show} when=${shareFile}>${file => html`<${ShareModal} file=${file()} close=${_ => setShareFile()}/>`}<//>
-    <footer class="container pb-4 small text-body-secondary">Amalthea · Private file sharing</footer>
+    <footer class="site-footer">
+      <div class="mt-4 py-3 bg-body-secondary">
+        <div class="container d-flex justify-content-between align-items-center gap-3">
+          <${Show} when=${document.querySelector('meta[name="amalthea-imprint"]')?.content === 'true'} fallback=${html`<span class="text-secondary">PRIVATE</span>`}>
+            <a class="link-secondary" href=${`${base}/imprint`}>imprint</a>
+          <//>
+          <a class="link-secondary" href="https://github.com/RememberOfLife/amalthea">open-source</a>
+        </div>
+      </div>
+    </footer>
   `;
 }
 
