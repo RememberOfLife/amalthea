@@ -1,0 +1,17 @@
+[Unit]
+Description=Amalthea private file sharing
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory="@INSTALL_DIR@"
+ExecStart="@INSTALL_DIR@/bin/amalthea" --config "@INSTALL_DIR@/config.json" server
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

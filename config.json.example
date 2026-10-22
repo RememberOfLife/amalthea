@@ -1,0 +1,12 @@
+{
+  "webroot": "http://localhost:8080",
+  "listen": "127.0.0.1:8080",
+  "data_dir": "data",
+  "static_dir": "res/static",
+  "loglevel": "info",
+  "default_quota_bytes": "1G",
+  "session_days": 30,
+  "upload_expiry_days": 30,
+  "reconcile_seconds": 60,
+  "access_log_days": 90
+}

@@ -1,0 +1,16 @@
+# Insert in an HTTPS server block. Set config.json webroot to the external HTTPS URL.
+# Do not log secret sharing URLs. Configure your TLS certificate separately.
+location / {
+    access_log off;
+    client_max_body_size 5m;
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+# For a subpath such as /files/, use location /files/ and preserve that prefix
+# in proxy_pass (no trailing URI). Set webroot to https://example.org/files.
