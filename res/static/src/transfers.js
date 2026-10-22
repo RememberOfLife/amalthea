@@ -134,7 +134,7 @@ export function setRate(kind, value) {
 export function pause(key) {
     const job = running.get(key);
     if (!job || job.controller.signal.aborted) return;
-    patch(key, { pausing: true, status: "Pausing…" });
+    patch(key, { pausing: true, status: "Pausing..." });
     job.controller.abort();
 }
 export function pauseAll() {
@@ -242,7 +242,8 @@ export async function upload(file, name, scope, existing) {
                     if (existing && error.status === 404) {
                         const committed = await api(`/files/${existing.id}`);
                         if (
-                            (committed.status !== "ready" || committed.sha256 === hash) &&
+                            (committed.status !== "ready" ||
+                                committed.sha256 === hash) &&
                             committed.size === file.size
                         ) {
                             patch(key, {
