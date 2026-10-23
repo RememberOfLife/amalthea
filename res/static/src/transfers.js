@@ -1,5 +1,6 @@
 import { createSignal } from "../vendor/solid.js";
 import { api, endpoint } from "./api.js";
+import { reportError } from "./errors.js";
 import { CHUNK, hex, throttle } from "./transfer-utils.js";
 import {
     storageDirectory,
@@ -113,6 +114,7 @@ export function refreshBrowserStorage() {
                 checkedAt: Date.now(),
             });
         } catch (error) {
+            if (error.message !== browserStorage().error) reportError(error);
             setBrowserStorage((state) => ({
                 ...state,
                 checking: false,
@@ -333,6 +335,7 @@ export async function upload(file, name, scope, existing) {
             },
         );
     } catch (error) {
+        reportError(error);
         patch(key, {
             status: error.name === "AbortError" ? "Paused" : error.message,
             phase:
@@ -529,6 +532,7 @@ async function runDownload(job, writeMetadata) {
             ),
         );
     } catch (error) {
+        reportError(error);
         patch(job.key, {
             status: error.name === "AbortError" ? "Paused" : error.message,
             phase: error.name === "AbortError" ? "paused" : "error",

@@ -122,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
                 "images/amalthea.webp",
                 "src/main.js",
                 "src/api.js",
+                "src/errors.js",
                 "src/transfers.js",
                 "src/browser-storage.js",
                 "src/transfer.worker.js",

@@ -122,6 +122,10 @@ async fn page(
     let path = original
         .strip_prefix(app.settings.prefix())
         .unwrap_or(original);
+    // API misses remain machine-readable; page navigation is handled below.
+    if path == "/api" || path.starts_with("/api/") {
+        return Err(Error::missing());
+    }
     let parts: Vec<_> = path.trim_matches('/').split('/').collect();
     if matches!(path, "/login/" | "/register/") {
         return Ok(Redirect::permanent(&format!(
@@ -131,31 +135,33 @@ async fn page(
         ))
         .into_response());
     }
+    let mut status = StatusCode::OK;
     let imprint = match &app.settings.imprint {
         None => None,
         Some(path) => match tokio::fs::read_to_string(path).await {
             Ok(content) if !content.trim().is_empty() => Some(content),
             Ok(_) => None,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                status = Error::internal(error).0;
+                None
+            }
         },
     };
-    if matches!(path, "/imprint" | "/imprint/") && imprint.is_none() {
-        return Err(Error::missing());
-    }
     let valid = path == "/"
-        || matches!(path, "/imprint" | "/imprint/")
+        || (matches!(path, "/imprint" | "/imprint/") && imprint.is_some())
         || path == "/login"
         || path == "/register"
         || (matches!(parts.len(), 2 | 3) && parts[0] == "s")
         || (parts.len() == 2 && parts[0] == "links");
     if !valid {
-        if parts.len() != 1 {
-            return Err(Error::missing());
-        }
+        let username = match parts.as_slice() {
+            ["u", username] => Some(*username),
+            _ => None,
+        };
         match auth::user(&app, &headers).await {
-            Ok(user) if user.username.eq_ignore_ascii_case(parts[0]) => {
-                let canonical = format!("/{}/", user.username);
+            Ok(user) if username.is_some_and(|name| user.username.eq_ignore_ascii_case(name)) => {
+                let canonical = format!("/u/{}/", user.username);
                 if path != canonical {
                     return Ok(Redirect::permanent(&format!(
                         "{}{canonical}",
@@ -164,11 +170,17 @@ async fn page(
                     .into_response());
                 }
             }
-            _ => {
+            Ok(_) => {
+                if status == StatusCode::OK {
+                    status = StatusCode::NOT_FOUND;
+                }
+            }
+            Err(error) if error.0 == StatusCode::UNAUTHORIZED => {
                 return Ok(
                     Redirect::to(&format!("{}/login", app.settings.prefix())).into_response()
                 );
             }
+            Err(error) => status = error.0,
         }
     } else if path != "/" && path.ends_with('/') {
         return Ok(Redirect::permanent(&format!(
@@ -181,6 +193,7 @@ async fn page(
     let html = tokio::fs::read_to_string(app.settings.static_dir.join("index.html")).await?;
     let html = html.replace("__AMALTHEA_BASE__", app.settings.prefix());
     let html = html.replace("__AMALTHEA_VERSION__", env!("CARGO_PKG_VERSION"));
+    let html = html.replace("__AMALTHEA_PAGE_STATUS__", status.as_str());
     let html = html.replace(
         "__AMALTHEA_IMPRINT_AVAILABLE__",
         if imprint.is_some() { "true" } else { "false" },
@@ -194,6 +207,7 @@ async fn page(
         },
     );
     Ok((
+        status,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         if request.method() == Method::HEAD {
             Body::empty()

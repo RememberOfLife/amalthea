@@ -8,6 +8,7 @@ import {
     Show,
 } from "../vendor/solid.js";
 import { api, base, endpoint, json, bytes } from "./api.js";
+import { errorLog, reportError } from "./errors.js";
 import { safeName } from "./transfer-utils.js";
 import { transferProgress } from "./transfer-progress.js";
 import {
@@ -27,13 +28,11 @@ import {
     discard,
 } from "./transfers.js";
 
-const [error, setError] = createSignal("");
 const run = async (action) => {
-    setError("");
     try {
         return await action();
     } catch (e) {
-        setError(e.message);
+        reportError(e);
     }
 };
 const date = (seconds) => {
@@ -65,16 +64,6 @@ const downloadUnavailable = () => {
     if (!storage.checked) return "Checking browser storage...";
     return "";
 };
-const alert = () =>
-    error() &&
-    html`<div class="alert alert-danger" role="alert">
-        ${error}<button
-            class="btn-close float-end"
-            aria-label="Dismiss error"
-            onClick=${() => setError("")}
-        ></button>
-    </div>`;
-
 function storageQuota(account) {
     const used = account.used_bytes;
     const reserved = account.reserved_bytes;
@@ -128,11 +117,19 @@ function storageQuota(account) {
 }
 
 function App() {
+    const pageStatus = Number(document.querySelector('meta[name="amalthea-page-status"]').content);
     const [me, setMe] = createSignal();
     const [files, setFiles] = createSignal([]);
     const [notice, setNotice] = createSignal("");
     const [loading, setLoading] = createSignal(true);
-    const [pageError, setPageError] = createSignal();
+    const [pageError, setPageError] = createSignal(pageStatus >= 400 ? {
+        status: pageStatus,
+        message: pageStatus === 404
+            ? "The page you requested does not exist."
+            : pageStatus === 403
+              ? "You do not have access to this page."
+              : "The page could not be loaded. Please try again.",
+    } : undefined);
     const [shared, setShared] = createSignal();
     const [scope, setScope] = createSignal("");
     const [selected, setSelected] = createSignal();
@@ -153,7 +150,7 @@ function App() {
     const sharedContent = () =>
         token ? `/public/${token}/content` : `/files/${shared()?.id}/content`;
     const registration = path === "/register";
-    const imprint = path === "/imprint" || path === "/imprint/";
+    const imprint = !unavailable() && (path === "/imprint" || path === "/imprint/");
     const invitation = location.hash.slice(1);
     // Serialize account reads so an older response cannot overwrite newer quota.
     let accountRefresh = Promise.resolve();
@@ -199,6 +196,12 @@ function App() {
     // Quota refresh failures must not interrupt an otherwise healthy upload.
     configureTransfers(refresh, () => run(refreshAccount));
     onMount(async () => {
+        if (pageError()) {
+            document.title = `${pageError().status} · Amalthea`;
+            reportError(new Error(pageError().message));
+            setLoading(false);
+            return;
+        }
         if (imprint) {
             document.title = "Imprint · Amalthea";
             setLoading(false);
@@ -219,25 +222,30 @@ function App() {
                 history.replaceState(
                     null,
                     "",
-                    `${base}/${me().user.username}/`,
+                    `${base}/u/${me().user.username}/`,
                 );
             }
         } catch (e) {
-            if (linkPage)
+            if (linkPage) {
                 setPageError({ status: e.status, message: e.message });
-            else if (e.status !== 401) setError(e.message);
+                reportError(e);
+            } else if (e.status !== 401) reportError(e);
         } finally {
             setLoading(false);
         }
     });
     let polling = false;
+    let lastFileError = "";
     const filePoll = setInterval(async () => {
         if (!me() || linkPage || polling) return;
         polling = true;
         try {
             await refreshFiles();
-        } catch (_) {
-            /* Manual refresh reports errors. */
+            lastFileError = "";
+        } catch (error) {
+            // A continuing outage should not add the same error every two seconds.
+            if (error.message !== lastFileError) reportError(error);
+            lastFileError = error.message;
         } finally {
             polling = false;
         }
@@ -330,14 +338,16 @@ function App() {
                         <h1 id="page-error-title" class="h3">
                             ${() =>
                                 pageError()?.status === 404
-                                    ? "Not found or no longer available"
+                                    ? linkPage ? "Not found or no longer available" : "Page not found"
                                     : pageError()?.status === 401
                                       ? "Sign in required"
-                                      : "Unable to open link"}
+                                      : pageError()?.status === 403
+                                        ? "Access denied"
+                                        : "Unable to load page"}
                         </h1>
                         <p class="text-body-secondary mb-4">
                             ${() =>
-                                pageError()?.status === 404
+                                pageError()?.status === 404 && linkPage
                                     ? "This link may have expired, been revoked, or been deleted."
                                     : pageError()?.message}
                         </p>
@@ -346,7 +356,6 @@ function App() {
                         >
                     </section>
                 <//>
-                <${Show} when=${() => !unavailable()}>${alert}<//>
                 ${() =>
                     notice() &&
                     html`<div class="alert alert-info" role="status">
@@ -803,9 +812,9 @@ function App() {
                 />`}<//
         >
         <footer class="site-footer">
-            <${Show} when=${() => me() || shared()}>
                 <details class="container py-0">
-                    <summary>advanced</summary>
+                    <summary>advanced${() => errorLog().length ? ` · ${errorLog().length} error${errorLog().length === 1 ? "" : "s"}` : ""}</summary>
+                    <${Show} when=${() => me() || shared()}>
                     <div class="row g-3 my-1">
                         ${["upload", "download"].map(
                             (kind) =>
@@ -832,8 +841,25 @@ function App() {
                                 </div>`,
                         )}
                     </div>
+                    <//>
+                    <section class="my-3" aria-labelledby="error-log-title">
+                        <h2 id="error-log-title" class="h6">Error log</h2>
+                        <div class="table-responsive log">
+                            <table class="table table-sm small mb-0">
+                                <thead><tr><th scope="col">Timestamp</th><th scope="col">Message</th></tr></thead>
+                                <tbody>
+                                    <${For} each=${() => errorLog().slice().reverse()}
+                                        fallback=${html`<tr><td colspan="2" class="text-body-secondary">No errors recorded.</td></tr>`}>
+                                        ${(entry) => html`<tr>
+                                            <td class="text-nowrap"><time datetime=${new Date(entry.at * 1000).toISOString()}>${date(entry.at)}</time></td>
+                                            <td class="text-break">${entry.message}</td>
+                                        </tr>`}
+                                    <//>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
                 </details>
-            <//>
             <div class="mt-3 py-3 bg-body-secondary">
                 <div
                     class="container d-flex justify-content-between align-items-center gap-3"
@@ -900,8 +926,11 @@ function AuthForm(props) {
                 );
                 if (version === idVersion)
                     setIdStatus(result.available ? "available" : "unavailable");
-            } catch {
-                if (version === idVersion) setIdStatus("error");
+            } catch (error) {
+                if (version === idVersion) {
+                    setIdStatus("error");
+                    reportError(error);
+                }
             }
         }, 300);
     };
@@ -948,7 +977,7 @@ function AuthForm(props) {
                                     : {}),
                             }),
                         );
-                        location.assign(`${base}/${account.username}/`);
+                        location.assign(`${base}/u/${account.username}/`);
                     }).finally(() => setBusy(false));
                 }}
             >
@@ -1049,7 +1078,6 @@ function Modal(props) {
         );
     };
     onMount(() => {
-        setError("");
         dialog.showModal();
     });
     return html`<dialog
@@ -1078,7 +1106,7 @@ function Modal(props) {
                 onClick=${props.close}
             ></button>
         </div>
-        ${alert}${() => props.children}
+        ${() => props.children}
     </dialog>`;
 }
 function RenameModal(props) {

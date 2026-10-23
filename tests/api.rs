@@ -1348,15 +1348,15 @@ async fn csrf_canonical_urls_and_subpath_assets() {
         StatusCode::FORBIDDEN
     );
     for (path, to) in [
-        ("/Alice", "/share/Alice/"),
-        ("/alice/", "/share/Alice/"),
+        ("/u/Alice", "/share/u/Alice/"),
+        ("/u/alice/", "/share/u/Alice/"),
         ("/register/", "/share/register"),
     ] {
         let (status, headers, _) = h.request("GET", path, &cookie, vec![], &[]).await;
         assert_eq!(status, StatusCode::PERMANENT_REDIRECT);
         assert_eq!(headers["location"], to);
     }
-    let (status, _, body) = h.request("GET", "/Alice/", &cookie, vec![], &[]).await;
+    let (status, _, body) = h.request("GET", "/u/Alice/", &cookie, vec![], &[]).await;
     assert_eq!(status, StatusCode::OK);
     let body = String::from_utf8(body).unwrap();
     assert!(body.contains("/share/res/static/src/main.js"));
@@ -1373,6 +1373,102 @@ async fn csrf_canonical_urls_and_subpath_assets() {
             .0,
         StatusCode::NOT_FOUND
     );
+}
+
+#[tokio::test]
+async fn personal_pages_use_the_user_namespace_and_require_the_owner() {
+    for prefix in ["", "/share"] {
+        let h = Harness::with_prefix(prefix).await;
+        let alice = h.seed("Alice", 100).await;
+        let bob = h.seed("Bob", 100).await;
+        assert_eq!(
+            h.request("GET", "/u/Alice/", &alice, vec![], &[]).await.0,
+            StatusCode::OK,
+        );
+        for path in ["/u/alice", "/u/Alice"] {
+            let (status, headers, _) = h.request("GET", path, &alice, vec![], &[]).await;
+            assert_eq!(status, StatusCode::PERMANENT_REDIRECT);
+            assert_eq!(headers["location"], format!("{prefix}/u/Alice/"));
+        }
+        for path in ["/Alice", "/Alice/", "/alice/"] {
+            let (status, headers, _) = h.request("GET", path, &alice, vec![], &[]).await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert!(!headers.contains_key("location"));
+        }
+        let (status, headers, _) = h.request("GET", "/u/Alice/", "", vec![], &[]).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        assert_eq!(headers["location"], format!("{prefix}/login"));
+        assert_eq!(
+            h.request("GET", "/u/Alice/", &bob, vec![], &[]).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            h.request("GET", "/u/Alice/unknown", &alice, vec![], &[])
+                .await
+                .0,
+            StatusCode::NOT_FOUND,
+        );
+    }
+}
+
+#[tokio::test]
+async fn unknown_pages_redirect_guests_and_render_html_errors_for_users() {
+    for prefix in ["", "/share"] {
+        let h = Harness::with_prefix(prefix).await;
+        let cookie = h.seed("Alice", 100).await;
+        for path in [
+            "/admin",
+            "/admin/",
+            "/missing/nested/page",
+            "/Alice",
+            "/u/Bob/",
+            "/imprint",
+        ] {
+            for session in ["", "amalthea_session=invalid"] {
+                let (status, headers, _) = h.request("GET", path, session, vec![], &[]).await;
+                assert_eq!(status, StatusCode::SEE_OTHER, "{path}");
+                assert_eq!(headers["location"], format!("{prefix}/login"));
+            }
+            let (status, headers, body) = h.request("GET", path, &cookie, vec![], &[]).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert_eq!(headers["content-type"], "text/html; charset=utf-8");
+            assert_eq!(headers["cache-control"], "no-store");
+            assert!(!headers.contains_key("location"));
+            let body = String::from_utf8(body).unwrap();
+            assert!(body.contains("name=\"amalthea-page-status\" content=\"404\""));
+            assert!(body.contains(&format!("{prefix}/res/static/src/main.js")));
+            assert!(!body.contains("__AMALTHEA_PAGE_STATUS__"));
+        }
+        let (status, headers, body) = h.request("HEAD", "/admin", &cookie, vec![], &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(headers["content-type"], "text/html; charset=utf-8");
+        assert!(body.is_empty());
+        // API consumers still receive JSON errors, with or without a session.
+        for session in ["", &cookie] {
+            let (status, headers, body) = h
+                .request("GET", "/api/live/unknown", session, vec![], &[])
+                .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(headers["content-type"], "application/json");
+            assert!(serde_json::from_slice::<Value>(&body).unwrap()["error"].is_string());
+        }
+        let (_, _, body) = h.request("GET", "/u/Alice/", &cookie, vec![], &[]).await;
+        assert!(
+            String::from_utf8(body)
+                .unwrap()
+                .contains("name=\"amalthea-page-status\" content=\"200\"")
+        );
+        // A page-level server failure uses the same HTML shell and its own status.
+        h.app.db.close().await;
+        let (status, headers, body) = h.request("GET", "/admin", &cookie, vec![], &[]).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(headers["content-type"], "text/html; charset=utf-8");
+        assert!(
+            String::from_utf8(body)
+                .unwrap()
+                .contains("name=\"amalthea-page-status\" content=\"500\"")
+        );
+    }
 }
 
 #[tokio::test]
@@ -1521,7 +1617,7 @@ async fn imprint_fragment_and_private_fallback() {
     );
     assert_eq!(
         h.request("GET", "/imprint", "", vec![], &[]).await.0,
-        StatusCode::NOT_FOUND
+        StatusCode::SEE_OTHER
     );
     std::fs::write(
         h.app.settings.imprint.as_ref().unwrap(),
@@ -1540,7 +1636,7 @@ async fn imprint_fragment_and_private_fallback() {
     std::fs::write(h.app.settings.imprint.as_ref().unwrap(), "  ").unwrap();
     assert_eq!(
         h.request("GET", "/imprint", "", vec![], &[]).await.0,
-        StatusCode::NOT_FOUND
+        StatusCode::SEE_OTHER
     );
 }
 
@@ -1560,7 +1656,7 @@ async fn imprint_disabled_shows_private_even_when_example_exists() {
     );
     assert_eq!(
         h.request("GET", "/imprint", "", vec![], &[]).await.0,
-        StatusCode::NOT_FOUND
+        StatusCode::SEE_OTHER
     );
 }
 
