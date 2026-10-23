@@ -685,6 +685,42 @@ function App() {
 
 function AuthForm(props) {
     const [busy, setBusy] = createSignal(false);
+    const [idStatus, setIdStatus] = createSignal("idle");
+    const idStatuses = {
+        idle: ["secondary", "<>", "Enter a UserId"],
+        checking: ["secondary", "...", "Checking availability"],
+        available: ["success", "OK", "UserId is available"],
+        unavailable: ["danger", "N/A", "UserId is invalid or unavailable"],
+        error: ["warning", "?", "Could not check availability; try again"],
+    };
+    let idTimer;
+    let idVersion = 0;
+    const checkId = (event) => {
+        if (!props.registration) return;
+        const username = event.currentTarget.value;
+        const version = ++idVersion;
+        clearTimeout(idTimer);
+        if (!username) return setIdStatus("idle");
+        if (!/^[A-Za-z0-9_]{1,64}$/.test(username))
+            return setIdStatus("unavailable");
+        setIdStatus("checking");
+        idTimer = setTimeout(async () => {
+            try {
+                const result = await api(
+                    "/register/check-username",
+                    json("POST", { username, token: props.invitation }),
+                );
+                if (version === idVersion)
+                    setIdStatus(result.available ? "available" : "unavailable");
+            } catch {
+                if (version === idVersion) setIdStatus("error");
+            }
+        }, 300);
+    };
+    onCleanup(() => {
+        clearTimeout(idTimer);
+        ++idVersion;
+    });
     const validateConfirmation = (form) => {
         const confirmation = form.elements.namedItem("password-confirmation");
         if (!confirmation) return;
@@ -728,13 +764,31 @@ function AuthForm(props) {
                     }).finally(() => setBusy(false));
                 }}
             >
-                <label class="form-label mb-1" for="username"
-                    ><span class="text-body-secondary">User</span
-                    ><b>Id</b></label
-                ><input
+                <div
+                    class="d-flex justify-content-between align-items-center mb-1"
+                >
+                    <label class="form-label mb-0" for="username"
+                        ><span class="text-body-secondary">User</span
+                        ><b>Id</b></label
+                    >${props.registration &&
+                    html`<span
+                        id="username-status"
+                        class=${() =>
+                            `badge rounded-pill text-bg-${idStatuses[idStatus()][0]}`}
+                        role="status"
+                        title=${() => idStatuses[idStatus()][2]}
+                        aria-label=${() => idStatuses[idStatus()][2]}
+                        >${() => idStatuses[idStatus()][1]}</span
+                    >`}
+                </div>
+                <input
                     class="form-control"
                     id="username"
                     name="username"
+                    onInput=${checkId}
+                    aria-describedby=${props.registration
+                        ? "username-status"
+                        : undefined}
                     autocomplete="username"
                     pattern="[A-Za-z0-9_]+"
                     maxlength="64"

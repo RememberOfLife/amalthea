@@ -132,6 +132,44 @@ pub async fn login(
 }
 
 #[derive(Deserialize)]
+pub struct UsernameCheck {
+    token: String,
+    username: String,
+}
+
+pub async fn check_username(
+    AxumState(app): AxumState<State>,
+    Json(input): Json<UsernameCheck>,
+) -> Result<Json<serde_json::Value>> {
+    let invited: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM invitations WHERE token_hash = ? AND expires_at > ?)",
+    )
+    .bind(model::hash(&input.token))
+    .bind(model::now())
+    .fetch_one(&app.db)
+    .await?;
+    if !invited {
+        return Err(Error::bad("Invitation is invalid, expired or already used"));
+    }
+    let mut available = model::valid_username(&input.username);
+    if available {
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)")
+                .bind(&input.username)
+                .fetch_one(&app.db)
+                .await?;
+        let directory = app.settings.data_dir.join("users").join(&input.username);
+        let occupied = match tokio::fs::symlink_metadata(directory).await {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e.into()),
+        };
+        available = !exists && !occupied;
+    }
+    Ok(Json(serde_json::json!({ "available": available })))
+}
+
+#[derive(Deserialize)]
 pub struct Registration {
     token: String,
     username: String,

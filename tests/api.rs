@@ -185,6 +185,56 @@ impl Harness {
 }
 
 #[tokio::test]
+async fn registration_username_availability() {
+    let h = Harness::new().await;
+    h.seed("Taken", 100).await;
+    std::fs::create_dir(h.app.settings.data_dir.join("users/orphan")).unwrap();
+    let token = model::secret();
+    sqlx::query("INSERT INTO invitations VALUES (?,?,?)")
+        .bind(model::hash(&token))
+        .bind(100)
+        .bind(model::now() + 1000)
+        .execute(&h.app.db)
+        .await
+        .unwrap();
+    for (username, available) in [
+        ("new_user", true),
+        ("taken", false),
+        ("LOGIN", false),
+        ("bad-id", false),
+        ("../escape", false),
+        ("", false),
+        ("orphan", false),
+    ] {
+        let (status, body) = h
+            .json(
+                "POST",
+                "/api/live/register/check-username",
+                "",
+                json!({"token": token, "username": username}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["available"], available, "{username}");
+    }
+    sqlx::query("UPDATE invitations SET expires_at = 0")
+        .execute(&h.app.db)
+        .await
+        .unwrap();
+    for invalid_token in [&token, "invalid"] {
+        let (status, _) = h
+            .json(
+                "POST",
+                "/api/live/register/check-username",
+                "",
+                json!({"token": invalid_token, "username": "new_user"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
 async fn invitation_registration_login_and_logout() {
     let h = Harness::with_prefix("/files").await;
     let invite = model::secret();

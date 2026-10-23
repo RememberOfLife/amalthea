@@ -21,6 +21,7 @@ pub fn router(app: State) -> Router {
     let api = Router::new()
         .route("/login", post(auth::login))
         .route("/register", post(auth::register))
+        .route("/register/check-username", post(auth::check_username))
         .route("/logout", post(auth::logout))
         .route("/me", get(me))
         .route("/files", get(files))
