@@ -56,12 +56,18 @@ body {
     overflow-wrap: anywhere;
     min-width: 0;
 }
+.bi::before {
+    -webkit-text-stroke: 0.3px currentColor;
+}
 @media (max-width: 575px) {
     .brand {
-        font-size: 1.2rem;
+        flex-direction: column;
+        gap: 0;
+        font-size: 1rem;
+        line-height: 1.25;
     }
     .brand-logo {
-        height: 56px;
+        height: 36px;
     }
 }
 .auth {

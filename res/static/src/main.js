@@ -232,12 +232,12 @@ function App() {
     return html`
         <header class="site-header border-bottom">
             <nav
-                class="container py-2 d-flex flex-wrap justify-content-between align-items-center gap-3"
+                class="container py-1 py-sm-2 d-flex flex-wrap justify-content-between align-items-center gap-3"
                 aria-label="Main"
             >
                 <a class="brand" href=${`${base}/`}>
                     <img
-                        class="brand-logo d-block w-auto flex-shrink-0 pe-1"
+                        class="brand-logo d-block w-auto flex-shrink-0 pe-sm-1"
                         src=${`${base}/res/static/images/amalthea.webp`}
                         alt=""
                         width="1103"
@@ -253,6 +253,8 @@ function App() {
                             >${() => me()?.user.username}</span
                         ><button
                             class="btn btn-sm btn-outline-secondary flex-shrink-0"
+                            title="Sign out"
+                            aria-label="Sign out"
                             onClick=${() =>
                                 run(async () => {
                                     pauseAll();
@@ -260,10 +262,12 @@ function App() {
                                     location.assign(`${base}/login`);
                                 })}
                         >
-                            Sign out
-                        </button>
-                    </div><//
-                >
+                            <i
+                                class="bi bi-box-arrow-right"
+                                aria-hidden="true"
+                            ></i>
+                        </button></div
+                ><//>
             </nav>
         </header>
         <main class="container py-4">
