@@ -368,19 +368,6 @@ function App() {
                                     <p class="small">
                                         ${() => linkStatus(shared().link)}
                                     </p>
-                                    <div class="mb-3">
-                                        <${LinkActions}
-                                            link=${() => shared().link}
-                                            refresh=${(_) => refreshShared()}
-                                            deleted=${(_) => {
-                                                pauseAll();
-                                                setShared();
-                                                setNotice(
-                                                    "Sharing link and access log deleted. The file is still in your files.",
-                                                );
-                                            }}
-                                        />
-                                    </div>
                                 <//>
                                 <${Show}
                                     when=${() =>
@@ -405,8 +392,13 @@ function App() {
                                             class="btn btn-outline-secondary"
                                             href=${() =>
                                                 endpoint(sharedContent())}
-                                            >Direct download</a
                                         >
+                                            <i
+                                                class="bi bi-download me-2"
+                                                aria-hidden="true"
+                                            ></i>
+                                            Direct download
+                                        </a>
                                     </div>
                                     <p
                                         class="small text-body-secondary mt-2 mb-0"
@@ -417,6 +409,17 @@ function App() {
                                     </p>
                                 <//>
                                 <${Show} when=${() => shared()?.link}>
+                                    <div class="border-top mt-3 pt-3">
+                                        <${LinkActions}
+                                            link=${() => shared().link}
+                                            showLabels=${true}
+                                            refresh=${(_) => refreshShared()}
+                                            deleted=${(_) => {
+                                                pauseAll();
+                                                location.replace(`${base}/`);
+                                            }}
+                                        />
+                                    </div>
                                     <${AccessLog}
                                         rows=${() => shared()?.access_log || []}
                                         refresh=${(_) => refreshShared()}
@@ -1021,6 +1024,17 @@ function AuthForm(props) {
 }
 function Modal(props) {
     let dialog;
+    let pressedOutside = false;
+    const outside = (event) => {
+        if (event.target !== dialog) return false;
+        const rect = dialog.getBoundingClientRect();
+        return (
+            event.clientX < rect.left ||
+            event.clientX > rect.right ||
+            event.clientY < rect.top ||
+            event.clientY > rect.bottom
+        );
+    };
     onMount(() => {
         setError("");
         dialog.showModal();
@@ -1031,6 +1045,14 @@ function Modal(props) {
         }}
         onClose=${props.close}
         onCancel=${props.close}
+        onPointerDown=${(event) => {
+            pressedOutside = event.button === 0 && outside(event);
+        }}
+        onClick=${(event) => {
+            const dismiss = pressedOutside && outside(event);
+            pressedOutside = false;
+            if (dismiss) dialog.close();
+        }}
         aria-label=${props.title}
     >
         <div
@@ -1101,7 +1123,8 @@ function LinkActions(props) {
     };
     return html`<div>
         <div
-            class="btn-group btn-group-sm"
+            class=${() =>
+                `btn-group btn-group-sm${props.showLabels ? " w-100" : ""}`}
             role="group"
             aria-label="Sharing link actions"
         >
@@ -1110,19 +1133,37 @@ function LinkActions(props) {
                 disabled=${() => busy() || !props.link.url}
                 title=${() =>
                     props.link.url
-                        ? "Copy sharing link"
+                        ? copied()
+                            ? "Link copied"
+                            : "Copy sharing link"
                         : "Open the original link once to recover its URL"}
+                aria-label=${() =>
+                    copied() ? "Link copied" : "Copy sharing link"}
                 onClick=${() =>
                     perform(async () => {
                         await navigator.clipboard.writeText(props.link.url);
                         setCopied(true);
                     })}
             >
-                ${() => (copied() ? "Copied" : "Copy link")}
+                <i
+                    class=${() => (copied() ? "bi bi-check-lg" : "bi bi-copy")}
+                    aria-hidden="true"
+                ></i>
+                <span class="ms-1" hidden=${() => !props.showLabels}
+                    >${() => (copied() ? "Copied" : "Copy link")}</span
+                >
             </button>
             <button
                 class="btn btn-sm btn-outline-warning"
                 disabled=${() => busy() || Boolean(props.link.revoked_at)}
+                title=${() =>
+                    props.link.revoked_at
+                        ? "Link revoked"
+                        : "Revoke sharing link"}
+                aria-label=${() =>
+                    props.link.revoked_at
+                        ? "Link revoked"
+                        : "Revoke sharing link"}
                 onClick=${() =>
                     perform(async () => {
                         await api(`/links/${props.link.id}/revoke`, {
@@ -1131,14 +1172,23 @@ function LinkActions(props) {
                         await props.refresh();
                     })}
             >
-                ${() => (props.link.revoked_at ? "Revoked" : "Revoke")}
+                <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                <span class="ms-1" hidden=${() => !props.showLabels}
+                    >${() =>
+                        props.link.revoked_at ? "Revoked" : "Revoke link"}</span
+                >
             </button>
             <button
                 class="btn btn-sm btn-outline-danger"
+                title="Delete sharing link"
+                aria-label="Delete sharing link"
                 disabled=${busy}
                 onClick=${() => setConfirmDelete(true)}
             >
-                Delete
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                <span class="ms-1" hidden=${() => !props.showLabels}
+                    >Delete link</span
+                >
             </button>
         </div>
         <${Show} when=${() => !props.link.url}>
@@ -1305,7 +1355,7 @@ function ShareModal(props) {
                                     >
                                 </td>
                                 <td class="small">${linkStatus(link)}</td>
-                                <td>
+                                <td class="share-link-actions">
                                     <${LinkActions}
                                         link=${link}
                                         refresh=${(_) => refresh()}

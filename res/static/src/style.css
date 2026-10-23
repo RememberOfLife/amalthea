@@ -93,6 +93,13 @@ body {
 .shared-file-actions > .btn {
     flex-grow: 1;
 }
+.share-link-actions {
+    width: 1%;
+    white-space: nowrap;
+}
+.share-link-actions > div > .btn-group {
+    width: 100%;
+}
 .file-row {
     display: flex;
     flex-direction: row;

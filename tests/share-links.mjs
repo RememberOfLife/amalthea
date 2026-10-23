@@ -49,9 +49,8 @@ for (const view of ["download page", "sharing table"]) {
             const requests = [];
             const clipboard = [];
             let refreshes = 0;
-            let deletions = 0;
             let pauses = 0;
-            const notices = [];
+            const redirects = [];
             const initial = {
                 id: "one",
                 url: "https://example.test/s/secret/file.txt",
@@ -94,8 +93,8 @@ for (const view of ["download page", "sharing table"]) {
                               shared: () => ({ link: link() }),
                               refreshShared: refresh,
                               pauseAll: () => pauses++,
-                              setShared: () => deletions++,
-                              setNotice: (message) => notices.push(message),
+                              base: "/share",
+                              location: { replace: (path) => redirects.push(path) },
                           }
                         : { link: initial, refresh };
                 template = bindComponent(
@@ -131,9 +130,8 @@ for (const view of ["download page", "sharing table"]) {
             await confirmDelete();
             assert.deepEqual(requests[1], ["/links/one", "DELETE"]);
             if (view === "download page") {
-                assert.equal(deletions, 1);
                 assert.equal(pauses, 1);
-                assert.match(notices[0], /deleted/);
+                assert.deepEqual(redirects, ["/share/"]);
             } else {
                 assert.equal(refreshes, 2);
             }
