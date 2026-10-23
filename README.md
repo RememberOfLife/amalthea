@@ -74,15 +74,34 @@ The config's `imprint` points to an HTML fragment (e.g. `"imprint": "imprint.htm
 Set it to `null` or omit it to display PRIVATE without an imprint link.
 
 ```sh
-# TODO On the server, as the service user:
-./setup.sh /absolute/install/path
-# Edit the installed config.json, then:
+# From your development machine, connecting as the service user:
+./setup.sh user@hostname /absolute/install/path
+
+# On the server: edit /absolute/install/path/config.json, then:
 systemctl --user start amalthea
 # Publish the service via nginx (example in `ops/nginx.conf.example`).
 
-# From dev pc to a servers install installed:
+# From your development machine, to update the installation:
 ./deploy.sh user@hostname /absolute/install/path
 ```
+
+Both commands require Git, SSH and SCP locally. They transfer an allowlisted
+`git archive HEAD` snapshot; commit changes to deployment inputs before running
+them. Local config, data, untracked files and Git metadata are never transferred.
+The target needs Linux, Bash, a current stable Rust toolchain, a C compiler,
+tar, Python 3, flock and a running user systemd manager, available over SSH.
+Neither command uses sudo. For startup at boot without logging in, ask the
+server administrator to enable lingering for the service user.
+
+Setup creates a private `config.json` from the example only if it is absent,
+installs and enables the user service, and leaves it stopped for configuration.
+Use deploy for subsequent updates. Both commands build on the server with
+`cargo build --release --locked`, reusing the install directory's `target` cache.
+Deploy builds before stopping the service, replaces the binary and static assets,
+refreshes the service unit, and starts it again. Configuration, imprint and data
+are preserved. The previous binary and assets remain at `bin/amalthea.previous`
+and `res.previous` for manual recovery; database migrations are forward-only.
+One installation per service user is supported.
 
 File discovery immediately records metadata with a `processing` status; hashing runs
 outside the service mutation lock. Uploaded files enter the same durable queue.

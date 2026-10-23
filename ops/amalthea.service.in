@@ -1,10 +1,11 @@
 [Unit]
 Description=Amalthea private file sharing
-AssertPathExists=@INSTALL_DIR@
+AssertPathExists=@INSTALL_DIR@/
 
 [Service]
-WorkingDirectory="@INSTALL_DIR@"
-ExecStart="@INSTALL_DIR@/bin/amalthea" --config "@INSTALL_DIR@/config.json" server
+WorkingDirectory=@INSTALL_DIR@/
+# env permits characters that systemd forbids in the executable word itself.
+ExecStart=/usr/bin/env -- "@EXEC_INSTALL_DIR@/bin/amalthea" --config "@EXEC_INSTALL_DIR@/config.json" server
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
