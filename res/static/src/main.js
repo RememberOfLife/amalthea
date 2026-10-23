@@ -271,8 +271,7 @@ function App() {
             </nav>
         </header>
         <main
-            class=${() =>
-                `container py-4${!imprint && me() ? " workspace-container" : ""}`}
+            class=${`container py-4${!imprint ? " workspace-container" : ""}`}
         >
             <${Show} when=${imprint}>
                 <section
@@ -288,7 +287,7 @@ function App() {
                     html`<div class="alert alert-info" role="status">
                         ${notice}
                     </div>`}
-                <div class=${() => (me() ? "workspace" : "")}>
+                <div class="workspace">
                     <${Show}
                         when=${() => !loading()}
                         fallback=${html`<p role="status">Loading...</p>`}
@@ -1148,6 +1147,14 @@ function TransferRow(props) {
         job().pausing ||
         job().removing ||
         (!job().active && job().busyElsewhere);
+    const discardLabel = () =>
+        job().removing
+            ? "Removing..."
+            : job().kind === "download"
+              ? "Remove from browser"
+              : job().complete
+                ? "Dismiss"
+                : "Cancel upload";
     const resumeUpload = (file) => {
         const current = job();
         return upload(
@@ -1163,19 +1170,28 @@ function TransferRow(props) {
                 : undefined,
         );
     };
-    return html`<article class="card card-body mb-2">
-        <div class="d-flex flex-wrap justify-content-between gap-2">
+    return html`<article class="list-group-item p-3">
+        <div class="d-flex flex-wrap justify-content-between gap-1">
             <strong class="filename">${() => job().name}</strong>
-            <span class="small"
-                >${() =>
+            <span class="small ms-auto text-end">
+                <i
+                    class=${() =>
+                        `bi bi-${job().kind === "upload" ? "upload" : "download"} me-1`}
+                    hidden=${() => job().orphan}
+                    aria-hidden="true"
+                ></i>
+                <span class="visually-hidden" hidden=${() => job().orphan}>
+                    ${() => (job().kind === "upload" ? "Upload" : "Download")}
+                </span>
+                ${() =>
                     job().orphan
                         ? "Leftover data"
-                        : `${job().kind === "upload" ? "Upload" : "Download"} · ${bytes(job().offset || 0)} / ${bytes(job().size)}`}</span
-            >
+                        : `${bytes(job().offset || 0)} / ${bytes(job().size)}`}
+            </span>
         </div>
         <progress
             hidden=${() => job().orphan}
-            class="my-2 w-100"
+            class="d-block my-0 w-100"
             max=${() => Math.max(1, job().size || 0)}
             value=${() => job().offset || 0}
             aria-label=${() => `${job().name} progress`}
@@ -1185,17 +1201,6 @@ function TransferRow(props) {
                 job().busyElsewhere && !job().active
                     ? "In use in another tab. Pause it there before resuming or removing it here."
                     : job().status}
-        </p>
-        <p
-            class="small text-body-secondary mb-2"
-            hidden=${() => job().kind !== "download"}
-        >
-            ${() => {
-                const row = job();
-                if (row.storedBytes == null)
-                    return "Checking browser storage...";
-                return `${bytes(row.storedBytes)} stored in this browser${row.storageUnknown ? " + files currently in use" : ""} · ${(row.entries || []).length} local files, including metadata and checkpoints`;
-            }}
         </p>
         <div class="d-flex gap-2 flex-wrap align-items-center">
             <button
@@ -1253,16 +1258,11 @@ function TransferRow(props) {
                 class="btn btn-sm btn-outline-secondary"
                 hidden=${() => job().active}
                 disabled=${blocked}
+                title=${discardLabel}
+                aria-label=${discardLabel}
                 onClick=${() => run(() => discard(job()))}
             >
-                ${() =>
-                    job().removing
-                        ? "Removing..."
-                        : job().kind === "download"
-                          ? "Remove from browser"
-                          : job().complete
-                            ? "Dismiss"
-                            : "Cancel upload"}
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
             </button>
         </div>
     </article>`;
@@ -1278,9 +1278,11 @@ function Transfers(props) {
             class="upload-transfers mb-3"
         >
             <h2 class="h5" id="transfers-title">Uploads</h2>
-            <${For} each=${() => uploads().map((job) => job.key)}>
-                ${(key) => html`<${TransferRow} transferKey=${key} />`}
-            <//>
+            <div class="list-group">
+                <${For} each=${() => uploads().map((job) => job.key)}>
+                    ${(key) => html`<${TransferRow} transferKey=${key} />`}
+                <//>
+            </div>
         </section>
     <//>`;
 }
@@ -1360,9 +1362,11 @@ function BrowserStorage() {
                 return `${downloads().length} entries · ${bytes(total())}${unknown() ? " + files currently in use (size available when paused)" : ""} in browser storage`;
             }}
         </p>
-        <${For} each=${() => downloads().map((job) => job.key)}
-            >${(key) => html`<${TransferRow} transferKey=${key} />`}<//
-        >
+        <div class="list-group">
+            <${For} each=${() => downloads().map((job) => job.key)}
+                >${(key) => html`<${TransferRow} transferKey=${key} />`}<//
+            >
+        </div>
         <${Show} when=${confirmClear}
             >${(_) =>
                 html`<${Modal}
