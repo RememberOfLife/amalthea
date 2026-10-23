@@ -46,7 +46,7 @@ test("paused, failed, restored, and completed transfers are solid", () => {
         [{ phase: "error" }, "danger"],
         [{ phase: "conflict" }, "warning"],
         [{ busyElsewhere: true }, "secondary"],
-        [{ active: true, pausing: true, phase: "verifying" }, "warning"],
+        [{ active: true, pausing: true, phase: "verifying" }, "secondary"],
         [{ active: true, complete: true, phase: "complete" }, "success"],
     ]) {
         const view = transferProgress({ size: 100, offset: 75, ...state });

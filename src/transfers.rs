@@ -35,7 +35,7 @@ pub async fn start(
         ));
     }
     if input.size < 0 || input.size > 9_007_199_254_740_991 || !model::valid_hash(&input.sha256) {
-        return Err(Error::bad("Invalid size or SHA-256"));
+        return Err(Error::bad("Invalid file size or hash"));
     }
     let _guard = app.mutation.lock().await;
     storage::reconcile_user(&app, &user).await?;
@@ -145,14 +145,14 @@ pub async fn chunk(
     let hash = headers
         .get("upload-checksum")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| Error::bad("Upload-Checksum (SHA-256) is required"))?;
+        .ok_or_else(|| Error::bad("Upload hash is required"))?;
     if bytes.is_empty() || bytes.len() > CHUNK_BYTES {
-        return Err(Error::bad("Chunk size or checksum is invalid"));
+        return Err(Error::bad("Uploaded part has an invalid size or hash"));
     }
     let checksum_bytes = bytes.clone();
     let checksum = tokio::task::spawn_blocking(move || model::hash(&checksum_bytes)).await?;
     if checksum != hash {
-        return Err(Error::bad("Chunk size or checksum is invalid"));
+        return Err(Error::bad("Uploaded part has an invalid size or hash"));
     }
     // A disconnected request must not release its lock while filesystem writes
     // are still in flight. The task owns the lock through fsync and offset commit.

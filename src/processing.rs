@@ -125,7 +125,7 @@ pub async fn process(app: &State, file: &FileRecord, token: CancellationToken) -
                 .as_ref()
                 .is_some_and(|expected| expected != &hash)
             {
-                Err("Complete file checksum does not match; delete and upload again")
+                Err("Uploaded file hash does not match; delete and upload again")
             } else {
                 // Recovery cleanup is part of this same bounded, fair job. Keep
                 // its durable flag until unlink + directory sync have completed.

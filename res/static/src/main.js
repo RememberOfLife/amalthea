@@ -1383,8 +1383,13 @@ function BrowserStorage() {
                     return `Could not fully inspect browser storage: ${state.error} Storage may still contain files.`;
                 if (!state.checked) return "Checking browser storage...";
                 if (!downloads().length)
-                    return "Browser storage is empty: no Amalthea downloads or leftover transfer files.";
-                return `${downloads().length} entries · ${bytes(total())}${unknown() ? " + files currently in use (size available when paused)" : ""} in browser storage`;
+                    return html`<span
+                        class="d-block text-center text-body-secondary fs-2"
+                        role="img"
+                        aria-label="Browser storage is empty"
+                        ><i class="bi bi-inbox" aria-hidden="true"></i
+                    ></span>`;
+                return `${downloads().length} entries · ${bytes(total())}${unknown() ? " (+ files in use)" : ""} in browser storage`;
             }}
         </p>
         <div class="list-group">

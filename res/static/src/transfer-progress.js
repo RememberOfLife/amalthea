@@ -42,7 +42,7 @@ export function transferProgress(job, serverFile) {
               : job.complete
                 ? "success"
                 : job.pausing
-                  ? "warning"
+                  ? "secondary"
                   : !active
                     ? "secondary"
                     : job.phase === "server"

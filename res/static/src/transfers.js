@@ -159,7 +159,7 @@ function hashing(file, controller, update) {
         };
         worker.onerror = () => {
             finish();
-            reject(new Error("File verification worker failed"));
+            reject(new Error("File hash worker failed"));
         };
         worker.onmessage = ({ data }) => {
             if (data.type === "progress") update(data.offset);
@@ -201,7 +201,7 @@ export async function upload(file, name, scope, existing) {
     const controller = new AbortController();
     running.set(key, { controller, kind: "upload" });
     patch(key, {
-        status: "Checking the entire source file",
+        status: "Calculating file hash",
         phase: "client",
         offset: 0,
         active: true,
@@ -225,7 +225,7 @@ export async function upload(file, name, scope, existing) {
                 ) {
                     patch(key, { file: undefined });
                     throw new Error(
-                        "Selected file differs from the original upload (SHA-256 mismatch).",
+                        "Selected file hash does not match the original upload. Choose the original file to resume.",
                     );
                 }
                 controller.signal.throwIfAborted();
@@ -253,7 +253,7 @@ export async function upload(file, name, scope, existing) {
                             committed.size === file.size
                         ) {
                             patch(key, {
-                                status: "Uploaded · see file list for processing status",
+                                status: "Uploaded",
                                 complete: true,
                                 phase: "complete",
                                 offset: file.size,
@@ -308,7 +308,7 @@ export async function upload(file, name, scope, existing) {
                     signal: controller.signal,
                 });
                 patch(key, {
-                    status: "Uploaded · see file list for processing status",
+                    status: "Uploaded",
                     complete: true,
                     phase: "complete",
                     file: undefined,
@@ -470,7 +470,7 @@ async function runDownload(job, writeMetadata) {
                                 !controller.signal.aborted
                             )
                                 patch(job.key, {
-                                    status: "Verifying SHA-256",
+                                    status: "Verifying file hash",
                                     phase: "verifying",
                                     offset: data.offset,
                                 });
