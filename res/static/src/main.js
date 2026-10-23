@@ -9,6 +9,7 @@ import {
 } from "../vendor/solid.js";
 import { api, base, endpoint, json, bytes } from "./api.js";
 import { safeName } from "./transfer-utils.js";
+import { transferProgress } from "./transfer-progress.js";
 import {
     jobs,
     configureTransfers,
@@ -424,7 +425,7 @@ function App() {
                                                     id="upload-name"
                                                     class="form-control"
                                                     value=${newName}
-                                                    maxlength="200"
+                                                    maxlength="128"
                                                     pattern="[A-Za-z0-9_][A-Za-z0-9_.]*"
                                                     required
                                                     onInput=${(e) =>
@@ -450,7 +451,7 @@ function App() {
                                     </div>
                                 </form>
                             </section>
-                            <${Transfers} scope=${scope} />
+                            <${Transfers} scope=${scope} files=${files} />
                             <div class="file-filter">
                                 <label class="visually-hidden" for="filter"
                                     >Filter files</label
@@ -958,12 +959,12 @@ function RenameModal(props) {
                 value=${name}
                 onInput=${(e) => setName(e.currentTarget.value)}
                 required
-                maxlength="200"
+                maxlength="128"
                 pattern="[A-Za-z0-9_][A-Za-z0-9_.]*"
             />
             <p class="small text-body-secondary">
                 ${props.file.incomplete
-                    ? "Choose a name of at most 200 ASCII letters, numbers, underscores and dots, with no leading dot. The file stays unchanged until you save."
+                    ? "Choose a name of at most 128 ASCII letters, numbers, underscores and dots, with no leading dot. The file stays unchanged until you save."
                     : "Existing sharing links keep working."}
             </p>
             <button class="btn btn-primary">Save name</button>
@@ -1139,6 +1140,11 @@ function TransferRow(props) {
     // For is keyed by the immutable transfer ID. Progress changes only these bindings,
     // so a pointer-down / pointer-up pair always lands on the same button element.
     const job = () => jobs().find((row) => row.key === props.transferKey) || {};
+    const progress = () =>
+        transferProgress(
+            job(),
+            props.files?.find((file) => file.id === job().uploadId),
+        );
     const canResume = () =>
         !job().orphan &&
         !job().complete &&
@@ -1171,36 +1177,51 @@ function TransferRow(props) {
         );
     };
     return html`<article class="list-group-item p-3">
-        <div class="d-flex flex-wrap justify-content-between gap-1">
-            <strong class="filename">${() => job().name}</strong>
-            <span class="small ms-auto text-end">
-                <i
-                    class=${() =>
-                        `bi bi-${job().kind === "upload" ? "upload" : "download"} me-1`}
-                    hidden=${() => job().orphan}
-                    aria-hidden="true"
-                ></i>
-                <span class="visually-hidden" hidden=${() => job().orphan}>
-                    ${() => (job().kind === "upload" ? "Upload" : "Download")}
+        <strong class="filename d-block">${() => job().name}</strong>
+        <span class="small" hidden=${() => !job().orphan}>Leftover data</span>
+        <div
+            hidden=${() => job().orphan}
+            class="progress transfer-progress my-1"
+            role="progressbar"
+            aria-label=${() => `${job().name} ${job().kind} progress`}
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow=${() =>
+                progress().indeterminate ? undefined : progress().percent}
+            aria-valuetext=${() =>
+                `${progress().status}: ${bytes(job().offset || 0)} / ${bytes(job().size)}`}
+            style=${() =>
+                `grid-template-columns: ${progress().percent}% minmax(0, 1fr)`}
+        >
+            <div
+                class=${() =>
+                    `progress-bar bg-${progress().color}${progress().active ? " progress-bar-striped progress-bar-animated" : ""}`}
+            ></div>
+            <span
+                class=${() =>
+                    `transfer-progress-label${progress().labelOnFill && !["warning", "info"].includes(progress().color) ? " text-white" : " text-dark"}`}
+                style=${() => `grid-column: ${progress().labelOnFill ? 1 : 2}`}
+            >
+                <span class="text-nowrap">
+                    <i
+                        class=${() =>
+                            `bi bi-${job().kind === "upload" ? "upload" : "download"} me-1`}
+                        aria-hidden="true"
+                    ></i>
+                    <span class="visually-hidden">
+                        ${() =>
+                            job().kind === "upload" ? "Upload" : "Download"}
+                    </span>
+                    ${() => bytes(job().offset || 0)}
                 </span>
-                ${() =>
-                    job().orphan
-                        ? "Leftover data"
-                        : `${bytes(job().offset || 0)} / ${bytes(job().size)}`}
+                <span class="text-nowrap">/ ${() => bytes(job().size)}</span>
             </span>
         </div>
-        <progress
-            hidden=${() => job().orphan}
-            class="d-block my-0 w-100"
-            max=${() => Math.max(1, job().size || 0)}
-            value=${() => job().offset || 0}
-            aria-label=${() => `${job().name} progress`}
-        ></progress>
         <p class="small mb-2" role="status">
             ${() =>
                 job().busyElsewhere && !job().active
                     ? "In use in another tab. Pause it there before resuming or removing it here."
-                    : job().status}
+                    : progress().status}
         </p>
         <div class="d-flex gap-2 flex-wrap align-items-center">
             <button
@@ -1280,7 +1301,11 @@ function Transfers(props) {
             <h2 class="h5" id="transfers-title">Uploads</h2>
             <div class="list-group">
                 <${For} each=${() => uploads().map((job) => job.key)}>
-                    ${(key) => html`<${TransferRow} transferKey=${key} />`}
+                    ${(key) =>
+                        html`<${TransferRow}
+                            transferKey=${key}
+                            files=${() => props.files}
+                        />`}
                 <//>
             </div>
         </section>

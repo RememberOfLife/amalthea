@@ -31,7 +31,7 @@ pub async fn start(
     let user = auth::user(&app, &headers).await?;
     if !model::valid_name(&input.name) {
         return Err(Error::bad(
-            "Filenames must use letters, numbers, underscores and dots, and cannot start with a dot (max 200 bytes)",
+            "Filenames must use letters, numbers, underscores and dots, and cannot start with a dot (max 128 bytes)",
         ));
     }
     if input.size < 0 || input.size > 9_007_199_254_740_991 || !model::valid_hash(&input.sha256) {

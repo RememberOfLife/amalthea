@@ -6,7 +6,7 @@ export function safeName(name) {
         name
             .replace(/[^A-Za-z0-9_.]/g, "_")
             .replace(/^\.+/, "_")
-            .slice(0, 200) || "file"
+            .slice(0, 128) || "file"
     );
 }
 export function checkRange(response, start, end, size, etag) {

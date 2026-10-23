@@ -72,6 +72,10 @@ export function refreshBrowserStorage() {
                     return {
                         ...row,
                         complete,
+                        phase:
+                            !row.busyElsewhere && !row.orphan
+                                ? previous?.phase
+                                : undefined,
                         status:
                             previous &&
                             !previous.active &&
@@ -198,6 +202,8 @@ export async function upload(file, name, scope, existing) {
     running.set(key, { controller, kind: "upload" });
     patch(key, {
         status: "Checking the entire source file",
+        phase: "client",
+        offset: 0,
         active: true,
         pausing: false,
         complete: false,
@@ -249,6 +255,7 @@ export async function upload(file, name, scope, existing) {
                             patch(key, {
                                 status: "Uploaded · see file list for processing status",
                                 complete: true,
+                                phase: "complete",
                                 offset: file.size,
                                 file: undefined,
                             });
@@ -264,6 +271,7 @@ export async function upload(file, name, scope, existing) {
                     sha256: hash,
                     offset: state.offset,
                     status: "Uploading",
+                    phase: "transfer",
                 });
                 // Reservation is for the full file, not just the chunks already sent.
                 void onQuotaChanged();
@@ -291,7 +299,10 @@ export async function upload(file, name, scope, existing) {
                     );
                 }
                 controller.signal.throwIfAborted();
-                patch(key, { status: "Queuing server processing" });
+                patch(key, {
+                    status: "Queuing server processing",
+                    phase: "server",
+                });
                 await api(`/uploads/${state.id}/finish`, {
                     method: "POST",
                     signal: controller.signal,
@@ -299,6 +310,7 @@ export async function upload(file, name, scope, existing) {
                 patch(key, {
                     status: "Uploaded · see file list for processing status",
                     complete: true,
+                    phase: "complete",
                     file: undefined,
                 });
                 await onUploaded();
@@ -307,6 +319,12 @@ export async function upload(file, name, scope, existing) {
     } catch (error) {
         patch(key, {
             status: error.name === "AbortError" ? "Paused" : error.message,
+            phase:
+                error.name === "AbortError"
+                    ? "paused"
+                    : error.status === 409
+                      ? "conflict"
+                      : "error",
         });
     } finally {
         running.delete(key);
@@ -401,6 +419,7 @@ async function runDownload(job, writeMetadata) {
     running.set(job.key, task);
     patch(job.key, {
         status: "Preparing download",
+        phase: "preparing",
         active: true,
         pausing: false,
         complete: false,
@@ -420,7 +439,10 @@ async function runDownload(job, writeMetadata) {
                     notifyStorage();
                     const directory = await storageDirectoryName();
                     controller.signal.throwIfAborted();
-                    patch(job.key, { status: "Downloading" });
+                    patch(job.key, {
+                        status: "Downloading",
+                        phase: "transfer",
+                    });
                     await new Promise((resolve, reject) => {
                         const worker = createWorker();
                         task.worker = worker;
@@ -447,10 +469,15 @@ async function runDownload(job, writeMetadata) {
                                 data.type === "verifying" &&
                                 !controller.signal.aborted
                             )
-                                patch(job.key, { status: "Verifying SHA-256" });
+                                patch(job.key, {
+                                    status: "Verifying SHA-256",
+                                    phase: "verifying",
+                                    offset: data.offset,
+                                });
                             if (data.type === "complete") {
                                 patch(job.key, {
                                     complete: true,
+                                    phase: "complete",
                                     offset: data.offset,
                                     status: "Complete · ready to save",
                                 });
@@ -481,6 +508,7 @@ async function runDownload(job, writeMetadata) {
     } catch (error) {
         patch(job.key, {
             status: error.name === "AbortError" ? "Paused" : error.message,
+            phase: error.name === "AbortError" ? "paused" : "error",
         });
     } finally {
         running.delete(job.key);

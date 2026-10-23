@@ -254,7 +254,7 @@ async fn rename(
     let user = auth::user(&app, &headers).await?;
     if !model::valid_name(&input.name) {
         return Err(Error::bad(
-            "Invalid filename: use letters, numbers, underscores and dots; no leading dot",
+            "Invalid filename: use at most 128 letters, numbers, underscores and dots; no leading dot",
         ));
     }
     let _guard = app.mutation.lock().await;

@@ -22,7 +22,7 @@ pub fn id() -> String {
 }
 pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
-        && name.len() <= 200
+        && name.len() <= 128
         && !name.starts_with('.')
         && name
             .bytes()

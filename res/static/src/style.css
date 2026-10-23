@@ -90,8 +90,31 @@ body {
     min-width: 0;
     flex: 1;
 }
-progress {
-    accent-color: #315a8a;
+.transfer-progress {
+    display: grid;
+    container-type: inline-size;
+    grid-template-rows: minmax(0, 1fr);
+    background-color: #e9ecef;
+}
+.transfer-progress > .progress-bar {
+    grid-area: 1 / 1;
+    transition: none;
+}
+.transfer-progress > .bg-primary {
+    background-color: #315a8a !important;
+}
+.transfer-progress-label {
+    grid-row: 1;
+    z-index: 1;
+    min-width: 0;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: center;
+    column-gap: 0.25rem;
+    padding-inline: 0.125rem;
+    font-size: clamp(0.5rem, 3.3cqi, 0.75rem);
+    line-height: 1;
 }
 dialog {
     border: 1px solid #dce0e5;
