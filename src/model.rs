@@ -29,7 +29,53 @@ pub fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
 }
 pub fn valid_username(name: &str) -> bool {
-    (1..=64).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    (1..=64).contains(&name.len())
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'@' | b'+'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_username;
+
+    #[test]
+    fn usernames_accept_punctuation_but_remain_single_safe_path_components() {
+        for name in [
+            "Alice_1",
+            "Alice.Smith-family+tag@example.org",
+            "Alice..Smith",
+            "Alice.",
+            "-",
+            "@",
+            "+",
+        ] {
+            assert!(valid_username(name), "{name:?}");
+        }
+        for name in [
+            "",
+            ".",
+            "..",
+            ".hidden",
+            "...",
+            "../escape",
+            "a/b",
+            "a\\b",
+            "a b",
+            "a\n",
+            "a\r",
+            "a\0",
+            "%2e%2e",
+            "a?b",
+            "a#b",
+            "ä",
+        ] {
+            assert!(!valid_username(name), "{name:?}");
+        }
+        assert!(valid_username(&"a".repeat(64)));
+        assert!(!valid_username(&"a".repeat(65)));
+    }
 }
 pub fn valid_hash(value: &str) -> bool {
     value.len() == 64

@@ -11,6 +11,7 @@ import { api, base, endpoint, json, bytes } from "./api.js";
 import { errorLog, reportError } from "./errors.js";
 import { safeName } from "./transfer-utils.js";
 import { transferProgress } from "./transfer-progress.js";
+import { usernamePattern, validUsername } from "./username.js";
 import {
     jobs,
     configureTransfers,
@@ -117,19 +118,26 @@ function storageQuota(account) {
 }
 
 function App() {
-    const pageStatus = Number(document.querySelector('meta[name="amalthea-page-status"]').content);
+    const pageStatus = Number(
+        document.querySelector('meta[name="amalthea-page-status"]').content,
+    );
     const [me, setMe] = createSignal();
     const [files, setFiles] = createSignal([]);
     const [notice, setNotice] = createSignal("");
     const [loading, setLoading] = createSignal(true);
-    const [pageError, setPageError] = createSignal(pageStatus >= 400 ? {
-        status: pageStatus,
-        message: pageStatus === 404
-            ? "The page you requested does not exist."
-            : pageStatus === 403
-              ? "You do not have access to this page."
-              : "The page could not be loaded. Please try again.",
-    } : undefined);
+    const [pageError, setPageError] = createSignal(
+        pageStatus >= 400
+            ? {
+                  status: pageStatus,
+                  message:
+                      pageStatus === 404
+                          ? "The page you requested does not exist."
+                          : pageStatus === 403
+                            ? "You do not have access to this page."
+                            : "The page could not be loaded. Please try again.",
+              }
+            : undefined,
+    );
     const [shared, setShared] = createSignal();
     const [scope, setScope] = createSignal("");
     const [selected, setSelected] = createSignal();
@@ -148,7 +156,8 @@ function App() {
     };
     const sharedContent = () => `/public/${token}/content`;
     const registration = path === "/register";
-    const imprint = !unavailable() && (path === "/imprint" || path === "/imprint/");
+    const imprint =
+        !unavailable() && (path === "/imprint" || path === "/imprint/");
     const invitation = location.hash.slice(1);
     // Serialize account reads so an older response cannot overwrite newer quota.
     let accountRefresh = Promise.resolve();
@@ -335,7 +344,9 @@ function App() {
                         <h1 id="page-error-title" class="h3">
                             ${() =>
                                 pageError()?.status === 404
-                                    ? linkPage ? "Not found or no longer available" : "Page not found"
+                                    ? linkPage
+                                        ? "Not found or no longer available"
+                                        : "Page not found"
                                     : pageError()?.status === 401
                                       ? "Sign in required"
                                       : pageError()?.status === 403
@@ -395,7 +406,8 @@ function App() {
                                     >
                                         <button
                                             class="btn btn-primary"
-                                            disabled=${() => Boolean(downloadUnavailable())}
+                                            disabled=${() =>
+                                                Boolean(downloadUnavailable())}
                                             title=${downloadUnavailable}
                                             onClick=${() =>
                                                 doDownload(shared())}
@@ -654,10 +666,13 @@ function App() {
                                                         hidden=${file.incomplete ||
                                                         file.status ===
                                                             "processing"}
-                                                        disabled=${() => file.status !==
-                                                            "ready" ||
-                                                        file.incomplete ||
-                                                        Boolean(downloadUnavailable())}
+                                                        disabled=${() =>
+                                                            file.status !==
+                                                                "ready" ||
+                                                            file.incomplete ||
+                                                            Boolean(
+                                                                downloadUnavailable(),
+                                                            )}
                                                         title=${downloadUnavailable}
                                                         onClick=${() =>
                                                             doDownload(file)}
@@ -809,9 +824,14 @@ function App() {
                 />`}<//
         >
         <footer class="site-footer">
-                <details class="container py-0">
-                    <summary>advanced${() => errorLog().length ? ` · ${errorLog().length} error${errorLog().length === 1 ? "" : "s"}` : ""}</summary>
-                    <${Show} when=${() => me() || shared()}>
+            <details class="container py-0">
+                <summary>
+                    advanced${() =>
+                        errorLog().length
+                            ? ` · ${errorLog().length} error${errorLog().length === 1 ? "" : "s"}`
+                            : ""}
+                </summary>
+                <${Show} when=${() => me() || shared()}>
                     <div class="row g-3 my-1">
                         ${["upload", "download"].map(
                             (kind) =>
@@ -838,25 +858,49 @@ function App() {
                                 </div>`,
                         )}
                     </div>
-                    <//>
-                    <section class="my-3" aria-labelledby="error-log-title">
-                        <h2 id="error-log-title" class="h6">Error log</h2>
-                        <div class="table-responsive log">
-                            <table class="table table-sm small mb-0">
-                                <thead><tr><th scope="col">Timestamp</th><th scope="col">Message</th></tr></thead>
-                                <tbody>
-                                    <${For} each=${() => errorLog().slice().reverse()}
-                                        fallback=${html`<tr><td colspan="2" class="text-body-secondary">No errors recorded.</td></tr>`}>
-                                        ${(entry) => html`<tr>
-                                            <td class="text-nowrap"><time datetime=${new Date(entry.at * 1000).toISOString()}>${date(entry.at)}</time></td>
-                                            <td class="text-break">${entry.message}</td>
+                <//>
+                <section class="my-3" aria-labelledby="error-log-title">
+                    <h2 id="error-log-title" class="h6">Error log</h2>
+                    <div class="table-responsive log">
+                        <table class="table table-sm small mb-0">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Timestamp</th>
+                                    <th scope="col">Message</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <${For}
+                                    each=${() => errorLog().slice().reverse()}
+                                    fallback=${html`<tr>
+                                        <td
+                                            colspan="2"
+                                            class="text-body-secondary"
+                                        >
+                                            No errors recorded.
+                                        </td>
+                                    </tr>`}
+                                >
+                                    ${(entry) =>
+                                        html`<tr>
+                                            <td class="text-nowrap">
+                                                <time
+                                                    datetime=${new Date(
+                                                        entry.at * 1000,
+                                                    ).toISOString()}
+                                                    >${date(entry.at)}</time
+                                                >
+                                            </td>
+                                            <td class="text-break">
+                                                ${entry.message}
+                                            </td>
                                         </tr>`}
-                                    <//>
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-                </details>
+                                <//>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </details>
             <div class="mt-3 py-3 bg-body-secondary">
                 <div
                     class="container d-flex justify-content-between align-items-center gap-3"
@@ -927,7 +971,9 @@ function PasswordInput(props) {
 
 function AuthForm(props) {
     const [busy, setBusy] = createSignal(false);
-    const [invitationReady, setInvitationReady] = createSignal(!props.registration);
+    const [invitationReady, setInvitationReady] = createSignal(
+        !props.registration,
+    );
     const [assignedUsername, setAssignedUsername] = createSignal(null);
     const [idStatus, setIdStatus] = createSignal("idle");
     const idStatuses = {
@@ -956,13 +1002,13 @@ function AuthForm(props) {
         }
     });
     const checkId = (event) => {
-        if (!props.registration || !invitationReady() || assignedUsername()) return;
+        if (!props.registration || !invitationReady() || assignedUsername())
+            return;
         const username = event.currentTarget.value;
         const version = ++idVersion;
         clearTimeout(idTimer);
         if (!username) return setIdStatus("idle");
-        if (!/^[A-Za-z0-9_]{1,64}$/.test(username))
-            return setIdStatus("unavailable");
+        if (!validUsername(username)) return setIdStatus("unavailable");
         setIdStatus("checking");
         idTimer = setTimeout(async () => {
             try {
@@ -1017,7 +1063,9 @@ function AuthForm(props) {
                         const account = await api(
                             props.registration ? "/register" : "/login",
                             json("POST", {
-                                username: assignedUsername() ?? values.get("username"),
+                                username:
+                                    assignedUsername() ??
+                                    values.get("username"),
                                 password: values.get("password"),
                                 ...(props.registration
                                     ? { token: props.invitation }
@@ -1050,13 +1098,14 @@ function AuthForm(props) {
                     id="username"
                     name="username"
                     value=${() => assignedUsername() ?? ""}
-                    disabled=${() => !invitationReady() || assignedUsername() !== null}
+                    disabled=${() =>
+                        !invitationReady() || assignedUsername() !== null}
                     onInput=${checkId}
                     aria-describedby=${props.registration
                         ? "username-status"
                         : undefined}
                     autocomplete="username"
-                    pattern="[A-Za-z0-9_]+"
+                    pattern=${usernamePattern}
                     maxlength="64"
                     required
                 />
@@ -1211,8 +1260,7 @@ function LinkActions(props) {
             <button
                 class="btn btn-sm btn-outline-primary"
                 disabled=${busy}
-                title=${() =>
-                    copied() ? "Link copied" : "Copy sharing link"}
+                title=${() => (copied() ? "Link copied" : "Copy sharing link")}
                 aria-label=${() =>
                     copied() ? "Link copied" : "Copy sharing link"}
                 onClick=${() =>
@@ -1537,9 +1585,15 @@ function TransferRow(props) {
             <button
                 class="btn btn-sm btn-outline-primary text-start"
                 hidden=${() => !job().active && !canResume()}
-                disabled=${() => blocked() ||
-                    (!job().active && job().kind === "download" && Boolean(downloadUnavailable()))}
-                title=${() => !job().active && job().kind === "download" ? downloadUnavailable() : ""}
+                disabled=${() =>
+                    blocked() ||
+                    (!job().active &&
+                        job().kind === "download" &&
+                        Boolean(downloadUnavailable()))}
+                title=${() =>
+                    !job().active && job().kind === "download"
+                        ? downloadUnavailable()
+                        : ""}
                 onClick=${() => {
                     const current = job();
                     if (current.active) pause(current.key);

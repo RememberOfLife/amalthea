@@ -222,7 +222,9 @@ pub async fn register(
     Json(input): Json<Registration>,
 ) -> Result<Response> {
     if !model::valid_username(&input.username) {
-        return Err(Error::bad("Use 1–64 letters, numbers or underscores"));
+        return Err(Error::bad(
+            "Use 1–64 ASCII letters, numbers, _, ., -, @ or +; no leading dot",
+        ));
     }
     if !(12..=1024).contains(&input.password.len()) {
         return Err(Error::bad("Password must contain 12–1024 bytes"));

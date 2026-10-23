@@ -134,6 +134,7 @@ async fn main() -> anyhow::Result<()> {
                 "images/favicon.png",
                 "images/amalthea.webp",
                 "src/main.js",
+                "src/username.js",
                 "src/api.js",
                 "src/errors.js",
                 "src/transfers.js",
@@ -206,7 +207,9 @@ async fn main() -> anyhow::Result<()> {
                 let mut tx = app.db.begin_with("BEGIN IMMEDIATE").await?;
                 if let Some(username) = &username {
                     if !model::valid_username(username) {
-                        bail!("username must contain 1–64 letters, numbers or underscores");
+                        bail!(
+                            "username must contain 1–64 ASCII letters, numbers, _, ., -, @ or +; no leading dot"
+                        );
                     }
                     if !auth::username_available(&app, &mut tx, username, "")
                         .await

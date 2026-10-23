@@ -161,11 +161,9 @@ async fn assigned_invitation_enforces_username_and_reservation_lifecycle() {
     let router = routes::router(app.clone());
     assert!(success(cli(&config, &["invite", "list"])).contains("\tAlice\t"));
     assert!(!cli(&config, &["user", "create", "alice"]).status.success());
-    assert!(
-        !cli(&config, &["user", "create", "../escape"])
-            .status
-            .success()
-    );
+    for username in [".", "..", ".hidden", "...", "../escape"] {
+        assert!(!cli(&config, &["user", "create", username]).status.success());
+    }
     assert_eq!(
         post(&router, "/invitation", json!({"token": token})).await,
         (StatusCode::OK, json!({"username": "Alice"}))
@@ -259,5 +257,33 @@ async fn assigned_invitation_enforces_username_and_reservation_lifecycle() {
     assert_eq!(
         post(&router, "", credentials(open_token, "Bob")).await.0,
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn assigned_invitation_accepts_username_punctuation() {
+    let (_dir, config) = test_config();
+    let username = "Alice.Smith-family+tag@example.org";
+    let url = success(cli(&config, &["user", "create", username]));
+    let token = url.trim().split_once('#').unwrap().1;
+    let app = App::open(Settings::load(&config).unwrap()).await.unwrap();
+    let router = routes::router(app.clone());
+    assert_eq!(
+        post(&router, "/invitation", json!({"token": token})).await,
+        (StatusCode::OK, json!({"username": username}))
+    );
+    let (status, user) = post(
+        &router,
+        "",
+        json!({"token": token, "username": username, "password": "a long correct password"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(user["username"], username);
+    assert!(app.settings.data_dir.join("users").join(username).is_dir());
+    assert!(
+        !cli(&config, &["user", "create", &username.to_ascii_uppercase()])
+            .status
+            .success()
     );
 }

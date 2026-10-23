@@ -212,7 +212,12 @@ async fn registration_username_availability() {
         ("health", true),
         ("favicon", true),
         ("index", true),
-        ("bad-id", false),
+        ("new-id", true),
+        ("Alice.Smith-family+tag@example.org", true),
+        (".", false),
+        ("..", false),
+        (".hidden", false),
+        ("...", false),
         ("../escape", false),
         ("", false),
         ("orphan", false),
@@ -246,9 +251,16 @@ async fn registration_username_availability() {
 }
 
 #[tokio::test]
-async fn registration_accepts_usernames_matching_top_level_routes() {
-    let h = Harness::new().await;
-    for username in ["login", "api"] {
+async fn registration_accepts_route_names_and_username_punctuation() {
+    let h = Harness::with_prefix("/amalthea").await;
+    for username in [
+        "login",
+        "api",
+        "Alice.Smith-family+tag@example.org",
+        "Alice..Smith",
+        "-leading",
+        "Alice.",
+    ] {
         let token = model::secret();
         sqlx::query("INSERT INTO invitations (token_hash, token, quota_bytes, expires_at) VALUES (?, ?, 100, ?)")
             .bind(model::hash(&token)).bind(&token).bind(model::now() + 60)
@@ -267,6 +279,14 @@ async fn registration_accepts_usernames_matching_top_level_routes() {
             )
             .await;
         assert_eq!(status, StatusCode::OK);
+        assert!(
+            h.app
+                .settings
+                .data_dir
+                .join("users")
+                .join(username)
+                .is_dir()
+        );
         let cookie = headers["set-cookie"]
             .to_str()
             .unwrap()
@@ -284,7 +304,7 @@ async fn registration_accepts_usernames_matching_top_level_routes() {
                 "POST",
                 "/api/live/login",
                 "",
-                json!({"username": username, "password": password})
+                json!({"username": username.to_ascii_uppercase(), "password": password})
             )
             .await
             .0,
