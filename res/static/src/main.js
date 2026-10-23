@@ -56,6 +56,15 @@ const capable = () =>
         navigator.storage?.getDirectory &&
         navigator.locks
     );
+const downloadUnavailable = () => {
+    if (!capable())
+        return "Resumable downloads require a current browser and HTTPS. Use Direct download instead.";
+    const storage = browserStorage();
+    if (storage.error)
+        return "Browser storage is unavailable. Use Direct download or try a normal browsing window.";
+    if (!storage.checked) return "Checking browser storage...";
+    return "";
+};
 const alert = () =>
     error() &&
     html`<div class="alert alert-danger" role="alert">
@@ -245,6 +254,8 @@ function App() {
     });
     const doDownload = (file) =>
         run(async () => {
+            const unavailable = downloadUnavailable();
+            if (unavailable) throw new Error(unavailable);
             if (navigator.storage.persist) await navigator.storage.persist();
             await download(
                 file,
@@ -378,7 +389,8 @@ function App() {
                                     >
                                         <button
                                             class="btn btn-primary"
-                                            disabled=${!capable()}
+                                            disabled=${() => Boolean(downloadUnavailable())}
+                                            title=${downloadUnavailable}
                                             onClick=${() =>
                                                 doDownload(shared())}
                                         >
@@ -636,10 +648,11 @@ function App() {
                                                         hidden=${file.incomplete ||
                                                         file.status ===
                                                             "processing"}
-                                                        disabled=${file.status !==
+                                                        disabled=${() => file.status !==
                                                             "ready" ||
                                                         file.incomplete ||
-                                                        !capable()}
+                                                        Boolean(downloadUnavailable())}
+                                                        title=${downloadUnavailable}
                                                         onClick=${() =>
                                                             doDownload(file)}
                                                     >
@@ -1466,7 +1479,9 @@ function TransferRow(props) {
             <button
                 class="btn btn-sm btn-outline-primary text-start"
                 hidden=${() => !job().active && !canResume()}
-                disabled=${blocked}
+                disabled=${() => blocked() ||
+                    (!job().active && job().kind === "download" && Boolean(downloadUnavailable()))}
+                title=${() => !job().active && job().kind === "download" ? downloadUnavailable() : ""}
                 onClick=${() => {
                     const current = job();
                     if (current.active) pause(current.key);
