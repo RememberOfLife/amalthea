@@ -270,7 +270,10 @@ function App() {
                 ><//>
             </nav>
         </header>
-        <main class="container py-4">
+        <main
+            class=${() =>
+                `container py-4${!imprint && me() ? " workspace-container" : ""}`}
+        >
             <${Show} when=${imprint}>
                 <section
                     class="imprint mx-auto bg-body-secondary p-3"
@@ -285,340 +288,359 @@ function App() {
                     html`<div class="alert alert-info" role="status">
                         ${notice}
                     </div>`}
-                <${Show}
-                    when=${() => !loading()}
-                    fallback=${html`<p role="status">Loading...</p>`}
-                >
-                    ${() =>
-                        !capable() &&
-                        html`<p class="alert alert-warning">
-                            Durable transfers need a current Firefox or Chrome
-                            browser over HTTPS (or localhost). Direct downloads
-                            remain available.
-                        </p>`}
-                    <${Show} when=${() => !me() && !token}
-                        ><${AuthForm}
-                            registration=${registration}
-                            invitation=${invitation}
-                    /><//>
-                    <${Show} when=${shared}>
-                        <section class="card card-body mb-4">
-                            <h1 class="h3 filename">${() => shared()?.name}</h1>
-                            <p>${() => bytes(shared()?.size)}</p>
-                            <div class="d-flex flex-wrap gap-2">
-                                <button
-                                    class="btn btn-primary"
-                                    disabled=${!capable()}
-                                    onClick=${() => doDownload(shared())}
-                                >
-                                    <i
-                                        class="bi bi-download pe-1"
-                                        aria-hidden="true"
-                                    ></i>
-                                    Download with resume
-                                </button>
-                                <a
-                                    class="btn btn-outline-secondary"
-                                    href=${endpoint(`/public/${token}/content`)}
-                                    >Direct download</a
-                                >
-                            </div>
-                            <p class="small text-body-secondary mt-3 mb-0">
-                                The resumable download stays in this browser
-                                until you remove it from browser storage,
-                                including after saving a copy. Anyone with this
-                                link can download until it expires or is
-                                revoked.
-                            </p>
-                        </section>
-                    <//>
-                    <${Show} when=${me}>
-                        <section class="mb-3" aria-label="Storage quota">
-                            <div
-                                class="d-flex justify-content-between align-items-center flex-wrap gap-2"
-                            >
-                                <h1 class="h3 mb-0">Your files</h1>
-                                <button
-                                    class="btn btn-sm btn-outline-secondary"
-                                    onClick=${() => run(refresh)}
-                                >
-                                    <i
-                                        class="bi bi-arrow-clockwise pe-1"
-                                        aria-hidden="true"
-                                    ></i>
-                                    Refresh
-                                </button>
-                            </div>
-                            ${() => me() && storageQuota(me())}
-                            ${() =>
-                                me() &&
-                                me().used_bytes + me().reserved_bytes >
-                                    me().user.quota_bytes &&
-                                html`<p class="text-danger">
-                                    You are
-                                    ${() =>
-                                        bytes(
-                                            me().used_bytes +
-                                                me().reserved_bytes -
-                                                me().user.quota_bytes,
-                                        )}
-                                    over quota. Delete files or cancel
-                                    unfinished uploads to free space.
-                                </p>`}
-                        </section>
-                        <section
-                            class="card card-body mb-3"
-                            aria-labelledby="upload-title"
-                        >
-                            <h2 id="upload-title" class="h5">Upload a file</h2>
-                            <form
-                                onSubmit=${(event) => {
-                                    event.preventDefault();
-                                    const file = selected();
-                                    if (!file) return;
-                                    run(() => upload(file, newName(), scope()));
-                                    setSelected();
-                                    event.currentTarget.reset();
-                                }}
-                            >
-                                <div class="row g-3 align-items-end">
-                                    <div class="col-md-6">
-                                        <input
-                                            id="upload-file"
-                                            class="form-control"
-                                            type="file"
-                                            disabled=${!capable()}
-                                            onChange=${(event) => {
-                                                const file =
-                                                    event.currentTarget
-                                                        .files[0];
-                                                setSelected(file);
-                                                if (file)
-                                                    setNewName(
-                                                        safeName(file.name),
-                                                    );
-                                            }}
-                                        />
-                                    </div>
-                                    <${Show} when=${selected}
-                                        ><div class="col-md-4">
-                                            <label
-                                                class="form-label"
-                                                for="upload-name"
-                                                >Stored filename</label
-                                            ><input
-                                                id="upload-name"
-                                                class="form-control"
-                                                value=${newName}
-                                                maxlength="200"
-                                                pattern="[A-Za-z0-9_][A-Za-z0-9_.]*"
-                                                required
-                                                onInput=${(e) =>
-                                                    setNewName(
-                                                        e.currentTarget.value,
-                                                    )}
-                                            /></div
-                                    ><//>
-                                    <div class="col-md-auto">
-                                        <button
-                                            class="btn btn-primary"
-                                            disabled=${() =>
-                                                !selected() || !capable()}
-                                        >
-                                            <i
-                                                class="bi bi-upload pe-2"
-                                                aria-hidden="true"
-                                            ></i>
-                                            Upload
-                                        </button>
-                                    </div>
-                                </div>
-                            </form>
-                        </section>
-                        <${Transfers} scope=${scope} />
-                        <label class="visually-hidden" for="filter"
-                            >Filter files</label
-                        ><input
-                            id="filter"
-                            class="form-control mb-3"
-                            type="search"
-                            placeholder="Filter files..."
-                            value=${filter}
-                            onInput=${(e) => setFilter(e.currentTarget.value)}
-                        />
-                        <div class="file-list list-group mb-4">
-                            <${For}
-                                each=${() =>
-                                    files().filter((f) =>
-                                        f.name
-                                            .toLowerCase()
-                                            .includes(filter().toLowerCase()),
-                                    )}
-                                fallback=${html`<p
-                                    class="text-body-secondary py-3"
-                                >
-                                    No matching files.
-                                </p>`}
-                            >
-                                ${(file) =>
-                                    html`<article
-                                        class="file-row list-group-item p-3"
+                <div class=${() => (me() ? "workspace" : "")}>
+                    <${Show}
+                        when=${() => !loading()}
+                        fallback=${html`<p role="status">Loading...</p>`}
+                    >
+                        ${() =>
+                            !capable() &&
+                            html`<p class="alert alert-warning">
+                                Durable transfers need a current Firefox or
+                                Chrome browser over HTTPS (or localhost). Direct
+                                downloads remain available.
+                            </p>`}
+                        <${Show} when=${() => !me() && !token}
+                            ><${AuthForm}
+                                registration=${registration}
+                                invitation=${invitation}
+                        /><//>
+                        <${Show} when=${shared}>
+                            <section class="shared-file card card-body mb-4">
+                                <h1 class="h3 filename">
+                                    ${() => shared()?.name}
+                                </h1>
+                                <p>${() => bytes(shared()?.size)}</p>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <button
+                                        class="btn btn-primary"
+                                        disabled=${!capable()}
+                                        onClick=${() => doDownload(shared())}
                                     >
-                                        <div class="file-info">
-                                            <h2 class="h6 filename mb-1">
-                                                ${file.name}
-                                            </h2>
-                                            <span
-                                                class="small text-body-secondary"
-                                                >${bytes(file.size)}</span
-                                            >
-                                            <p
-                                                class="small mb-0"
-                                                hidden=${file.status !==
-                                                "failed"}
-                                            >
-                                                ${file.processing_error ||
-                                                "Processing failed"}
-                                            </p>
-                                            <p
-                                                class="small text-warning-emphasis mb-0"
-                                                hidden=${!file.incomplete}
-                                            >
-                                                Incomplete — needs a valid
-                                                filename.
-                                            </p>
+                                        <i
+                                            class="bi bi-download pe-1"
+                                            aria-hidden="true"
+                                        ></i>
+                                        Download with resume
+                                    </button>
+                                    <a
+                                        class="btn btn-outline-secondary"
+                                        href=${endpoint(
+                                            `/public/${token}/content`,
+                                        )}
+                                        >Direct download</a
+                                    >
+                                </div>
+                                <p class="small text-body-secondary mt-3 mb-0">
+                                    The resumable download stays in this browser
+                                    until you remove it from browser storage,
+                                    including after saving a copy. Anyone with
+                                    this link can download until it expires or
+                                    is revoked.
+                                </p>
+                            </section>
+                        <//>
+                        <${Show} when=${me}>
+                            <section
+                                class="file-quota mb-3"
+                                aria-label="Storage quota"
+                            >
+                                <div
+                                    class="d-flex justify-content-between align-items-center flex-wrap gap-2"
+                                >
+                                    <h1 class="h3 mb-0">Your files</h1>
+                                    <button
+                                        class="btn btn-sm btn-outline-secondary"
+                                        onClick=${() => run(refresh)}
+                                    >
+                                        <i
+                                            class="bi bi-arrow-clockwise pe-1"
+                                            aria-hidden="true"
+                                        ></i>
+                                        Refresh
+                                    </button>
+                                </div>
+                                ${() => me() && storageQuota(me())}
+                                ${() =>
+                                    me() &&
+                                    me().used_bytes + me().reserved_bytes >
+                                        me().user.quota_bytes &&
+                                    html`<p class="text-danger">
+                                        You are
+                                        ${() =>
+                                            bytes(
+                                                me().used_bytes +
+                                                    me().reserved_bytes -
+                                                    me().user.quota_bytes,
+                                            )}
+                                        over quota. Delete files or cancel
+                                        unfinished uploads to free space.
+                                    </p>`}
+                            </section>
+                            <section
+                                class="upload-form card card-body mb-3"
+                                aria-labelledby="upload-title"
+                            >
+                                <h2 id="upload-title" class="h5">
+                                    Upload a file
+                                </h2>
+                                <form
+                                    onSubmit=${(event) => {
+                                        event.preventDefault();
+                                        const file = selected();
+                                        if (!file) return;
+                                        run(() =>
+                                            upload(file, newName(), scope()),
+                                        );
+                                        setSelected();
+                                        event.currentTarget.reset();
+                                    }}
+                                >
+                                    <div class="row g-3 align-items-end">
+                                        <div class="col-md-6">
+                                            <input
+                                                id="upload-file"
+                                                class="form-control"
+                                                type="file"
+                                                disabled=${!capable()}
+                                                onChange=${(event) => {
+                                                    const file =
+                                                        event.currentTarget
+                                                            .files[0];
+                                                    setSelected(file);
+                                                    if (file)
+                                                        setNewName(
+                                                            safeName(file.name),
+                                                        );
+                                                }}
+                                            />
                                         </div>
-                                        <div
-                                            class="d-flex align-items-center gap-2"
-                                        >
-                                            <span
-                                                class="small text-body-secondary d-inline-flex align-items-center text-nowrap"
-                                                role="status"
-                                                hidden=${file.status !==
-                                                "processing"}
-                                                ><span
-                                                    class="spinner-border spinner-border-sm me-2"
+                                        <${Show} when=${selected}
+                                            ><div class="col-md-4">
+                                                <label
+                                                    class="form-label"
+                                                    for="upload-name"
+                                                    >Stored filename</label
+                                                ><input
+                                                    id="upload-name"
+                                                    class="form-control"
+                                                    value=${newName}
+                                                    maxlength="200"
+                                                    pattern="[A-Za-z0-9_][A-Za-z0-9_.]*"
+                                                    required
+                                                    onInput=${(e) =>
+                                                        setNewName(
+                                                            e.currentTarget
+                                                                .value,
+                                                        )}
+                                                /></div
+                                        ><//>
+                                        <div class="col-md-auto">
+                                            <button
+                                                class="btn btn-primary"
+                                                disabled=${() =>
+                                                    !selected() || !capable()}
+                                            >
+                                                <i
+                                                    class="bi bi-upload pe-2"
                                                     aria-hidden="true"
-                                                ></span
-                                                >Processing...</span
-                                            >
-                                            <div
-                                                class="btn-group btn-group-sm"
-                                                role="group"
-                                                aria-label=${`Actions for ${file.name}`}
-                                            >
-                                                <button
-                                                    class="btn btn-sm btn-outline-primary"
-                                                    hidden=${file.incomplete ||
-                                                    file.status ===
-                                                        "processing"}
-                                                    disabled=${file.status !==
-                                                        "ready" ||
-                                                    file.incomplete ||
-                                                    !capable()}
-                                                    onClick=${() =>
-                                                        doDownload(file)}
-                                                >
-                                                    <i
-                                                        class="bi bi-download pe-1"
-                                                        aria-hidden="true"
-                                                    ></i>
-                                                    Download
-                                                </button>
-                                                <a
-                                                    class="btn btn-sm btn-outline-secondary"
-                                                    hidden=${file.status !==
-                                                        "ready" ||
-                                                    file.incomplete}
-                                                    href=${endpoint(
-                                                        `/files/${file.id}/content`,
-                                                    )}
-                                                    title="Use the browser's normal download manager"
-                                                    ><i
-                                                        class="bi bi-download pe-1"
-                                                        aria-hidden="true"
-                                                    ></i>
-                                                    Direct</a
-                                                >
-                                                <button
-                                                    class="btn btn-sm btn-outline-secondary"
-                                                    title="Share"
-                                                    aria-label="Share"
-                                                    hidden=${file.incomplete ||
-                                                    file.status ===
-                                                        "processing"}
-                                                    disabled=${file.status !==
-                                                        "ready" ||
-                                                    file.incomplete}
-                                                    onClick=${() =>
-                                                        setShareFile(file)}
-                                                >
-                                                    <i
-                                                        class="bi bi-share"
-                                                        aria-hidden="true"
-                                                    ></i>
-                                                </button>
-                                                <button
-                                                    class=${`btn btn-sm btn-outline-secondary${file.incomplete ? " rounded-start ms-0" : ""}`}
-                                                    title=${file.incomplete
-                                                        ? "Fix name"
-                                                        : "Rename"}
-                                                    aria-label=${file.incomplete
-                                                        ? "Fix name"
-                                                        : "Rename"}
-                                                    hidden=${file.status ===
-                                                    "processing"}
-                                                    disabled=${file.status !==
-                                                    "ready"}
-                                                    onClick=${() =>
-                                                        setRenameFile(file)}
-                                                >
-                                                    <i
-                                                        class="bi bi-pencil"
-                                                        aria-hidden="true"
-                                                    ></i>
-                                                </button>
-                                                <button
-                                                    class="btn btn-sm btn-outline-secondary"
-                                                    hidden=${file.status !==
-                                                        "failed" ||
-                                                    file.incomplete}
-                                                    onClick=${() =>
-                                                        run(async () => {
-                                                            await api(
-                                                                `/files/${file.id}/retry`,
-                                                                {
-                                                                    method: "POST",
-                                                                },
-                                                            );
-                                                            await refresh();
-                                                        })}
-                                                >
-                                                    Retry processing
-                                                </button>
-                                                <button
-                                                    class=${`btn btn-sm btn-outline-danger${file.status === "processing" ? " rounded-start ms-0" : ""}`}
-                                                    title="Delete"
-                                                    aria-label="Delete"
-                                                    onClick=${() =>
-                                                        setDeleteFile(file)}
-                                                >
-                                                    <i
-                                                        class="bi bi-x-lg"
-                                                        aria-hidden="true"
-                                                    ></i>
-                                                </button>
-                                            </div>
+                                                ></i>
+                                                Upload
+                                            </button>
                                         </div>
-                                    </article>`}
-                            <//>
-                        </div>
+                                    </div>
+                                </form>
+                            </section>
+                            <${Transfers} scope=${scope} />
+                            <div class="file-filter">
+                                <label class="visually-hidden" for="filter"
+                                    >Filter files</label
+                                ><input
+                                    id="filter"
+                                    class="form-control mb-3"
+                                    type="search"
+                                    placeholder="Filter files..."
+                                    value=${filter}
+                                    onInput=${(e) =>
+                                        setFilter(e.currentTarget.value)}
+                                />
+                            </div>
+                            <div class="file-list list-group mb-4">
+                                <${For}
+                                    each=${() =>
+                                        files().filter((f) =>
+                                            f.name
+                                                .toLowerCase()
+                                                .includes(
+                                                    filter().toLowerCase(),
+                                                ),
+                                        )}
+                                    fallback=${html`<p
+                                        class="text-body-secondary py-3"
+                                    >
+                                        No matching files.
+                                    </p>`}
+                                >
+                                    ${(file) =>
+                                        html`<article
+                                            class="file-row list-group-item p-3"
+                                        >
+                                            <div class="file-info">
+                                                <h2 class="h6 filename mb-1">
+                                                    ${file.name}
+                                                </h2>
+                                                <span
+                                                    class="small text-body-secondary"
+                                                    >${bytes(file.size)}</span
+                                                >
+                                                <p
+                                                    class="small mb-0"
+                                                    hidden=${file.status !==
+                                                    "failed"}
+                                                >
+                                                    ${file.processing_error ||
+                                                    "Processing failed"}
+                                                </p>
+                                                <p
+                                                    class="small text-warning-emphasis mb-0"
+                                                    hidden=${!file.incomplete}
+                                                >
+                                                    Incomplete — needs a valid
+                                                    filename.
+                                                </p>
+                                            </div>
+                                            <div
+                                                class="d-flex align-items-center gap-2"
+                                            >
+                                                <span
+                                                    class="small text-body-secondary d-inline-flex align-items-center text-nowrap"
+                                                    role="status"
+                                                    hidden=${file.status !==
+                                                    "processing"}
+                                                    ><span
+                                                        class="spinner-border spinner-border-sm me-2"
+                                                        aria-hidden="true"
+                                                    ></span
+                                                    >Processing...</span
+                                                >
+                                                <div
+                                                    class="btn-group btn-group-sm"
+                                                    role="group"
+                                                    aria-label=${`Actions for ${file.name}`}
+                                                >
+                                                    <button
+                                                        class="btn btn-sm btn-outline-primary"
+                                                        hidden=${file.incomplete ||
+                                                        file.status ===
+                                                            "processing"}
+                                                        disabled=${file.status !==
+                                                            "ready" ||
+                                                        file.incomplete ||
+                                                        !capable()}
+                                                        onClick=${() =>
+                                                            doDownload(file)}
+                                                    >
+                                                        <i
+                                                            class="bi bi-download pe-1"
+                                                            aria-hidden="true"
+                                                        ></i>
+                                                        Download
+                                                    </button>
+                                                    <a
+                                                        class="btn btn-sm btn-outline-secondary"
+                                                        hidden=${file.status !==
+                                                            "ready" ||
+                                                        file.incomplete}
+                                                        href=${endpoint(
+                                                            `/files/${file.id}/content`,
+                                                        )}
+                                                        title="Use the browser's normal download manager"
+                                                        ><i
+                                                            class="bi bi-download pe-1"
+                                                            aria-hidden="true"
+                                                        ></i>
+                                                        Direct</a
+                                                    >
+                                                    <button
+                                                        class="btn btn-sm btn-outline-secondary"
+                                                        title="Share"
+                                                        aria-label="Share"
+                                                        hidden=${file.incomplete ||
+                                                        file.status ===
+                                                            "processing"}
+                                                        disabled=${file.status !==
+                                                            "ready" ||
+                                                        file.incomplete}
+                                                        onClick=${() =>
+                                                            setShareFile(file)}
+                                                    >
+                                                        <i
+                                                            class="bi bi-share"
+                                                            aria-hidden="true"
+                                                        ></i>
+                                                    </button>
+                                                    <button
+                                                        class=${`btn btn-sm btn-outline-secondary${file.incomplete ? " rounded-start ms-0" : ""}`}
+                                                        title=${file.incomplete
+                                                            ? "Fix name"
+                                                            : "Rename"}
+                                                        aria-label=${file.incomplete
+                                                            ? "Fix name"
+                                                            : "Rename"}
+                                                        hidden=${file.status ===
+                                                        "processing"}
+                                                        disabled=${file.status !==
+                                                        "ready"}
+                                                        onClick=${() =>
+                                                            setRenameFile(file)}
+                                                    >
+                                                        <i
+                                                            class="bi bi-pencil"
+                                                            aria-hidden="true"
+                                                        ></i>
+                                                    </button>
+                                                    <button
+                                                        class="btn btn-sm btn-outline-secondary"
+                                                        hidden=${file.status !==
+                                                            "failed" ||
+                                                        file.incomplete}
+                                                        onClick=${() =>
+                                                            run(async () => {
+                                                                await api(
+                                                                    `/files/${file.id}/retry`,
+                                                                    {
+                                                                        method: "POST",
+                                                                    },
+                                                                );
+                                                                await refresh();
+                                                            })}
+                                                    >
+                                                        Retry processing
+                                                    </button>
+                                                    <button
+                                                        class=${`btn btn-sm btn-outline-danger${file.status === "processing" ? " rounded-start ms-0" : ""}`}
+                                                        title="Delete"
+                                                        aria-label="Delete"
+                                                        onClick=${() =>
+                                                            setDeleteFile(file)}
+                                                    >
+                                                        <i
+                                                            class="bi bi-x-lg"
+                                                            aria-hidden="true"
+                                                        ></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </article>`}
+                                <//>
+                            </div>
+                        <//>
+                        <${Show} when=${() => !me()}>
+                            <${Transfers} scope=${scope} />
+                        <//>
                     <//>
-                    <${Show} when=${() => !me()}>
-                        <${Transfers} scope=${scope} />
-                    <//>
-                <//>
-                <${BrowserStorage} />
+                    <${BrowserStorage} />
+                </div>
             <//>
         </main>
         <${Show} when=${deleteFile}
@@ -663,32 +685,37 @@ function App() {
                 />`}<//
         >
         <footer class="site-footer">
-            <details class="container py-0">
-                <summary>advanced</summary>
-                <div class="row g-3 my-1">
-                    ${["upload", "download"].map(
-                        (kind) =>
-                            html`<div class="col-sm-6 mt-0">
-                                <label
-                                    class="form-label mb-0"
-                                    for=${`${kind}-speed`}
-                                    >${kind === "upload"
-                                        ? "Upload"
-                                        : "Download"}
-                                    -Throttle (KiB/s; 0 = unlimited)</label
-                                ><input
-                                    id=${`${kind}-speed`}
-                                    class="form-control"
-                                    type="number"
-                                    min="0"
-                                    value="0"
-                                    onInput=${(e) =>
-                                        setRate(kind, e.currentTarget.value)}
-                                />
-                            </div>`,
-                    )}
-                </div>
-            </details>
+            <${Show} when=${() => me() || shared()}>
+                <details class="container py-0">
+                    <summary>advanced</summary>
+                    <div class="row g-3 my-1">
+                        ${["upload", "download"].map(
+                            (kind) =>
+                                html`<div class="col-sm-6 mt-0">
+                                    <label
+                                        class="form-label mb-0"
+                                        for=${`${kind}-speed`}
+                                        >${kind === "upload"
+                                            ? "Upload"
+                                            : "Download"}
+                                        -Throttle (KiB/s; 0 = unlimited)</label
+                                    ><input
+                                        id=${`${kind}-speed`}
+                                        class="form-control"
+                                        type="number"
+                                        min="0"
+                                        value="0"
+                                        onInput=${(e) =>
+                                            setRate(
+                                                kind,
+                                                e.currentTarget.value,
+                                            )}
+                                    />
+                                </div>`,
+                        )}
+                    </div>
+                </details>
+            <//>
             <div class="mt-3 py-3 bg-body-secondary">
                 <div
                     class="container d-flex justify-content-between align-items-center gap-3"
@@ -1246,7 +1273,10 @@ function Transfers(props) {
             (job) => job.kind === "upload" && job.scope === props.scope,
         );
     return html`<${Show} when=${() => uploads().length > 0}>
-        <section aria-labelledby="transfers-title" class="mb-3">
+        <section
+            aria-labelledby="transfers-title"
+            class="upload-transfers mb-3"
+        >
             <h2 class="h5" id="transfers-title">Uploads</h2>
             <${For} each=${() => uploads().map((job) => job.key)}>
                 ${(key) => html`<${TransferRow} transferKey=${key} />`}
@@ -1281,20 +1311,22 @@ function BrowserStorage() {
             window.removeEventListener("focus", refresh);
         });
     });
-    return html`<section aria-labelledby="browser-storage-title" class="mb-4">
-        <div
-            class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2"
-        >
-            <h2 id="browser-storage-title" class="h5 mb-0">
-                Downloads stored in this browser
-            </h2>
-            <div class="d-flex flex-wrap gap-2">
+    return html`<section
+        aria-labelledby="browser-storage-title"
+        class="browser-storage mb-4"
+    >
+        <h2 id="browser-storage-title" class="h5 mb-2">
+            Browser Storage (Downloads)
+        </h2>
+        <details class="small text-body-secondary mb-3">
+            <summary>advanced (help)</summary>
+            <div class="d-flex flex-wrap gap-2 mt-2 mb-2">
                 <button
                     class="btn btn-sm btn-outline-secondary"
                     disabled=${() => browserStorage().checking || clearing()}
                     onClick=${() => refreshBrowserStorage()}
                 >
-                    Refresh storage
+                    Refresh Storage
                 </button>
                 <button
                     class="btn btn-sm btn-outline-danger"
@@ -1305,17 +1337,18 @@ function BrowserStorage() {
                         (!downloads().length && !browserStorage().error)}
                     onClick=${() => setConfirmClear(true)}
                 >
-                    Clear browser downloads
+                    Clear Browser Storage Cache
                 </button>
             </div>
-        </div>
-        <p class="small text-body-secondary">
-            All downloads kept by this Amalthea site in this browser profile,
-            including other accounts, sharing links, and leftover files. Saving
-            a copy does not remove the browser copy; let the save finish before
-            removing it. “Remove from browser” deletes its data, metadata, and
-            checkpoints; your saved copies and server files stay available.
-        </p>
+            <p class="mb-0">
+                <b>All</b> downloads kept by this site instance in this browser
+                profile. (Including other accounts, sharing links, and leftover
+                files.)
+                <br />
+                Saving a copy does not remove the browser copy; let the save
+                finish before removing it.
+            </p>
+        </details>
         <p class="small" role="status">
             ${() => {
                 const state = browserStorage();
@@ -1327,29 +1360,9 @@ function BrowserStorage() {
                 return `${downloads().length} entries · ${bytes(total())}${unknown() ? " + files currently in use (size available when paused)" : ""} in browser storage`;
             }}
         </p>
-        <p
-            class="small text-body-secondary"
-            hidden=${() => !browserStorage().checkedAt}
-        >
-            Last checked:
-            ${() =>
-                browserStorage().checkedAt
-                    ? new Date(browserStorage().checkedAt).toLocaleTimeString()
-                    : ""}
-        </p>
         <${For} each=${() => downloads().map((job) => job.key)}
             >${(key) => html`<${TransferRow} transferKey=${key} />`}<//
         >
-        <details class="small text-body-secondary">
-            <summary>About browser storage</summary>
-            <p class="mt-2">
-                Downloads need space for the whole file here, plus room for a
-                saved copy. Private browsing, clearing site data, or browser
-                cleanup can erase partial downloads. This list covers this
-                Amalthea site's transfer storage; browser caches, login cookies,
-                and other applications are separate.
-            </p>
-        </details>
         <${Show} when=${confirmClear}
             >${(_) =>
                 html`<${Modal}

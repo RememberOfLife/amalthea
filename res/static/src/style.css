@@ -110,6 +110,65 @@ dialog::backdrop {
 summary {
     cursor: pointer;
 }
+/* Preserve DOM order on mobile; place transfer panels beside the files on desktop. */
+@media (min-width: 1200px) {
+    .workspace-container {
+        max-width: 1920px;
+        padding-inline: 1.5rem;
+    }
+    .workspace {
+        display: grid;
+        grid-template-columns: minmax(240px, 1fr) minmax(480px, 2fr) minmax(
+                280px,
+                1fr
+            );
+        grid-template-rows: auto auto auto auto 1fr;
+        column-gap: 1.5rem;
+        align-items: start;
+    }
+    .workspace > * {
+        min-width: 0;
+        grid-column: 2;
+    }
+    .workspace > .shared-file {
+        grid-row: 1;
+    }
+    .workspace > .file-quota {
+        grid-row: 2;
+    }
+    .workspace > .upload-form {
+        grid-row: 3;
+    }
+    .workspace > .file-filter {
+        grid-row: 4;
+    }
+    .workspace > .file-list {
+        grid-row: 5;
+    }
+    .workspace > .upload-transfers,
+    .workspace > .browser-storage {
+        grid-row: 1 / 6;
+        position: sticky;
+        top: 1rem;
+        max-height: calc(100vh - 2rem);
+        max-height: calc(100dvh - 2rem);
+        overflow-y: auto;
+        overflow-wrap: anywhere;
+        scrollbar-gutter: stable;
+    }
+    .workspace > .upload-transfers {
+        grid-column: 1;
+    }
+    .workspace > .browser-storage {
+        grid-column: 3;
+    }
+    .workspace .file-row {
+        flex-wrap: wrap;
+    }
+    .workspace .file-row .btn-group {
+        margin-left: auto;
+    }
+}
 @media (max-width: 700px) {
     .file-row {
         align-items: stretch;
