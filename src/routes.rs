@@ -49,6 +49,7 @@ pub fn router(app: State) -> Router {
         .route("/public/{token}/content", get(public_download))
         .layer(DefaultBodyLimit::max(transfers::CHUNK_BYTES));
     let routes = Router::new()
+        .route("/", get(page))
         .nest("/api/live", api)
         .route("/health", get(|| async { "ok" }))
         .nest_service(
@@ -68,7 +69,7 @@ pub fn router(app: State) -> Router {
                 &prefix,
                 get(move || async move { Redirect::permanent(&canonical) }),
             )
-            .nest(&prefix, routes)
+            .nest(&format!("{prefix}/"), routes)
     }
 }
 

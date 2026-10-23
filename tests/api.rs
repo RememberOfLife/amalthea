@@ -1379,6 +1379,31 @@ async fn publication_recovery_and_expired_upload_cleanup() {
 }
 
 #[tokio::test]
+async fn homepage_and_prefix_redirect_work_with_and_without_a_subpath() {
+    for prefix in ["", "/amalthea", "/nested/amalthea"] {
+        let h = Harness::with_prefix(prefix).await;
+        if !prefix.is_empty() {
+            let (status, headers, _) = h.request("GET", "", "", vec![], &[]).await;
+            assert_eq!(status, StatusCode::PERMANENT_REDIRECT, "{prefix}");
+            assert_eq!(headers["location"], format!("{prefix}/"));
+        }
+        for path in ["/", "/login"] {
+            let (status, headers, body) = h.request("GET", path, "", vec![], &[]).await;
+            assert_eq!(status, StatusCode::OK, "{prefix}{path}");
+            assert_eq!(headers["content-type"], "text/html; charset=utf-8");
+            assert_eq!(headers["cache-control"], "no-store");
+            let html = String::from_utf8(body).unwrap();
+            assert!(html.contains(&format!("{prefix}/res/static/src/main.js")));
+            assert!(html.contains("name=\"amalthea-page-status\" content=\"200\""));
+
+            let (status, _, body) = h.request("HEAD", path, "", vec![], &[]).await;
+            assert_eq!(status, StatusCode::OK, "HEAD {prefix}{path}");
+            assert!(body.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn csrf_canonical_urls_and_subpath_assets() {
     let h = Harness::with_prefix("/share").await;
     let cookie = h.seed("Alice", 100).await;
