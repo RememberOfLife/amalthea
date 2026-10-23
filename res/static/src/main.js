@@ -938,7 +938,7 @@ function Modal(props) {
         aria-label=${props.title}
     >
         <div
-            class="d-flex justify-content-between align-items-start gap-3 mb-3"
+            class="d-flex justify-content-between align-items-start gap-3 mb-1"
         >
             <h2 class="h4 filename">${props.title}</h2>
             <button
@@ -968,22 +968,24 @@ function RenameModal(props) {
                 });
             }}
         >
-            <label class="form-label" for="rename-name">Filename</label
+            <label class="form-label mb-0" for="rename-name">Filename</label
             ><input
                 id="rename-name"
-                class="form-control mb-3"
+                class="form-control"
                 value=${name}
                 onInput=${(e) => setName(e.currentTarget.value)}
                 required
                 maxlength="128"
                 pattern="[A-Za-z0-9_][A-Za-z0-9_.]*"
             />
-            <p class="small text-body-secondary">
+            <p class="small text-body-secondary ms-2 mb-2">
                 ${props.file.incomplete
                     ? "Choose a name of at most 128 ASCII letters, numbers, underscores and dots, with no leading dot. The file stays unchanged until you save."
                     : "Existing sharing links keep working."}
             </p>
-            <button class="btn btn-primary">Save name</button>
+            <div class="text-end">
+                <button class="btn btn-primary">Save name</button>
+            </div>
         </form><//
     >`;
 }
@@ -1000,10 +1002,7 @@ function ShareModal(props) {
         title=${`Share ${props.file.name}`}
         close=${props.close}
     >
-        <p>
-            Each link can be revoked independently. The full secret link is
-            shown only when created; copy it before closing.
-        </p>
+        <p>Full secret link shown only once; copy before closing.</p>
         <form
             class="row g-2 mb-3"
             onSubmit=${(e) => {
