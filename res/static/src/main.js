@@ -666,23 +666,25 @@ function App() {
                     close=${(_) => setDeleteFile()}
                 >
                     <p>
-                        <strong class="filename">${() => file().name}</strong>
+                        <code class="filename me-1">${() => file().name}</code>
                         and all its sharing links will be removed. There is no
                         trash or undo.
                     </p>
-                    <button
-                        class="btn btn-danger"
-                        onClick=${() =>
-                            run(async () => {
-                                await api(`/files/${file().id}`, {
-                                    method: "DELETE",
-                                });
-                                setDeleteFile();
-                                await refresh();
-                            })}
-                    >
-                        Permanently delete
-                    </button>
+                    <div class="text-end">
+                        <button
+                            class="btn btn-danger"
+                            onClick=${() =>
+                                run(async () => {
+                                    await api(`/files/${file().id}`, {
+                                        method: "DELETE",
+                                    });
+                                    setDeleteFile();
+                                    await refresh();
+                                })}
+                        >
+                            Permanently delete
+                        </button>
+                    </div>
                 <//>`}<//
         >
         <${Show} when=${renameFile}
