@@ -115,6 +115,9 @@ summary {
         align-items: stretch;
         flex-direction: column;
     }
+    .file-row .btn-group {
+        flex-grow: 1;
+    }
     .file-row .btn {
         flex: 1 0 auto;
     }

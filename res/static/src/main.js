@@ -333,7 +333,7 @@ function App() {
                         </section>
                     <//>
                     <${Show} when=${me}>
-                        <section class="mb-4" aria-label="Storage quota">
+                        <section class="mb-3" aria-label="Storage quota">
                             <div
                                 class="d-flex justify-content-between align-items-center flex-wrap gap-2"
                             >
@@ -367,7 +367,7 @@ function App() {
                                 </p>`}
                         </section>
                         <section
-                            class="card card-body mb-4"
+                            class="card card-body mb-3"
                             aria-labelledby="upload-title"
                         >
                             <h2 id="upload-title" class="h5">Upload a file</h2>
@@ -435,6 +435,7 @@ function App() {
                                 </div>
                             </form>
                         </section>
+                        <${Transfers} scope=${scope} />
                         <label class="visually-hidden" for="filter"
                             >Filter files</label
                         ><input
@@ -613,7 +614,9 @@ function App() {
                             <//>
                         </div>
                     <//>
-                    <${Transfers} scope=${scope} />
+                    <${Show} when=${() => !me()}>
+                        <${Transfers} scope=${scope} />
+                    <//>
                 <//>
                 <${BrowserStorage} />
             <//>
@@ -660,7 +663,33 @@ function App() {
                 />`}<//
         >
         <footer class="site-footer">
-            <div class="mt-4 py-3 bg-body-secondary">
+            <details class="container py-0">
+                <summary>advanced</summary>
+                <div class="row g-3 my-1">
+                    ${["upload", "download"].map(
+                        (kind) =>
+                            html`<div class="col-sm-6 mt-0">
+                                <label
+                                    class="form-label mb-0"
+                                    for=${`${kind}-speed`}
+                                    >${kind === "upload"
+                                        ? "Upload"
+                                        : "Download"}
+                                    -Throttle (KiB/s; 0 = unlimited)</label
+                                ><input
+                                    id=${`${kind}-speed`}
+                                    class="form-control"
+                                    type="number"
+                                    min="0"
+                                    value="0"
+                                    onInput=${(e) =>
+                                        setRate(kind, e.currentTarget.value)}
+                                />
+                            </div>`,
+                    )}
+                </div>
+            </details>
+            <div class="mt-3 py-3 bg-body-secondary">
                 <div
                     class="container d-flex justify-content-between align-items-center gap-3"
                 >
@@ -1212,50 +1241,18 @@ function TransferRow(props) {
     </article>`;
 }
 function Transfers(props) {
-    return html`<section aria-labelledby="transfers-title" class="mb-4">
-        <h2 class="h5" id="transfers-title">Uploads and transfer controls</h2>
-        <details class="mb-3">
-            <summary>Speed limits</summary>
-            <div class="row g-3 my-1">
-                ${["upload", "download"].map(
-                    (kind) =>
-                        html`<div class="col-sm-6">
-                            <label class="form-label" for=${`${kind}-speed`}
-                                >${kind === "upload" ? "Upload" : "Download"}
-                                limit (KiB/s; 0 = unlimited)</label
-                            ><input
-                                id=${`${kind}-speed`}
-                                class="form-control"
-                                type="number"
-                                min="0"
-                                value="0"
-                                onInput=${(e) =>
-                                    setRate(kind, e.currentTarget.value)}
-                            />
-                        </div>`,
-                )}
-            </div>
-            <p class="small text-body-secondary">
-                Limits apply per transfer, averaged over chunks.
-            </p>
-        </details>
-        <p class="small text-body-secondary">
-            Uploads read your original file and keep partial bytes on the
-            server. They do not create a copy in browser storage.
-        </p>
-        <${For}
-            each=${() =>
-                jobs()
-                    .filter(
-                        (job) =>
-                            job.kind === "upload" && job.scope === props.scope,
-                    )
-                    .map((job) => job.key)}
-            fallback=${html`<p class="text-body-secondary">No uploads.</p>`}
-        >
-            ${(key) => html`<${TransferRow} transferKey=${key} />`}
-        <//>
-    </section>`;
+    const uploads = () =>
+        jobs().filter(
+            (job) => job.kind === "upload" && job.scope === props.scope,
+        );
+    return html`<${Show} when=${() => uploads().length > 0}>
+        <section aria-labelledby="transfers-title" class="mb-3">
+            <h2 class="h5" id="transfers-title">Uploads</h2>
+            <${For} each=${() => uploads().map((job) => job.key)}>
+                ${(key) => html`<${TransferRow} transferKey=${key} />`}
+            <//>
+        </section>
+    <//>`;
 }
 function BrowserStorage() {
     const [confirmClear, setConfirmClear] = createSignal(false);
