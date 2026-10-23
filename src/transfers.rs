@@ -23,6 +23,47 @@ pub struct NewUpload {
     pub size: i64,
     pub sha256: String,
 }
+#[derive(Deserialize)]
+pub struct UploadName {
+    pub name: String,
+}
+pub async fn check_name(
+    AxumState(app): AxumState<State>,
+    headers: HeaderMap,
+    Json(input): Json<UploadName>,
+) -> Result<StatusCode> {
+    let user = auth::user(&app, &headers).await?;
+    if !model::valid_name(&input.name) {
+        return Err(Error::bad(
+            "Filenames must use letters, numbers, underscores and dots, and cannot start with a dot (max 128 bytes)",
+        ));
+    }
+    let _guard = app.mutation.lock().await;
+    storage::reconcile_user(&app, &user).await?;
+    let reserved: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM uploads WHERE user_id = ? AND name = ?)")
+            .bind(user.id)
+            .bind(&input.name)
+            .fetch_one(&app.db)
+            .await?;
+    if reserved {
+        return Err(Error::conflict(
+            "Another upload already reserves this filename; cancel it first",
+        ));
+    }
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM files WHERE user_id = ? AND name = ?)")
+            .bind(user.id)
+            .bind(&input.name)
+            .fetch_one(&app.db)
+            .await?;
+    if exists {
+        return Err(Error::conflict(
+            "A file already has this name; rename or delete it first",
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
 pub async fn start(
     AxumState(app): AxumState<State>,
     headers: HeaderMap,

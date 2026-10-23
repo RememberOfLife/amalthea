@@ -121,6 +121,24 @@ body {
     border-top-left-radius: var(--bs-border-radius-sm);
     border-bottom-left-radius: var(--bs-border-radius-sm);
 }
+@media (max-width: 767.98px) {
+    .upload-controls {
+        flex-direction: column;
+        flex-wrap: nowrap;
+    }
+    .upload-controls > .form-control,
+    .upload-controls > .btn {
+        width: 100%;
+        margin-left: 0;
+    }
+    .upload-controls > .form-control {
+        border-radius: var(--bs-border-radius) var(--bs-border-radius) 0 0 !important;
+    }
+    .upload-controls > .btn {
+        margin-top: calc(-1 * var(--bs-border-width));
+        border-radius: 0 0 var(--bs-border-radius) var(--bs-border-radius) !important;
+    }
+}
 dialog {
     border: 1px solid #dce0e5;
     border-radius: 0.5rem;

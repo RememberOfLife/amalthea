@@ -396,59 +396,71 @@ function App() {
                                         event.currentTarget.reset();
                                     }}
                                 >
-                                    <div class="row g-3 align-items-end">
-                                        <div class="col-md-6">
-                                            <input
-                                                id="upload-file"
-                                                class="form-control"
-                                                type="file"
-                                                disabled=${!capable()}
-                                                onChange=${(event) => {
-                                                    const file =
-                                                        event.currentTarget
-                                                            .files[0];
-                                                    setSelected(file);
-                                                    if (file)
-                                                        setNewName(
-                                                            safeName(file.name),
-                                                        );
-                                                }}
-                                            />
-                                        </div>
-                                        <${Show} when=${selected}
-                                            ><div class="col-md-4">
-                                                <label
-                                                    class="form-label"
-                                                    for="upload-name"
-                                                    >Stored filename</label
-                                                ><input
-                                                    id="upload-name"
-                                                    class="form-control"
-                                                    value=${newName}
-                                                    maxlength="128"
-                                                    pattern="[A-Za-z0-9_][A-Za-z0-9_.]*"
-                                                    required
-                                                    onInput=${(e) =>
-                                                        setNewName(
-                                                            e.currentTarget
-                                                                .value,
-                                                        )}
-                                                /></div
-                                        ><//>
-                                        <div class="col-md-auto">
-                                            <button
-                                                class="btn btn-primary"
-                                                disabled=${() =>
-                                                    !selected() || !capable()}
-                                            >
-                                                <i
-                                                    class="bi bi-upload pe-2"
-                                                    aria-hidden="true"
-                                                ></i>
-                                                Upload
-                                            </button>
-                                        </div>
+                                    <label
+                                        class="visually-hidden"
+                                        for="upload-file"
+                                        >Select a file to upload</label
+                                    >
+                                    <div class="input-group upload-controls">
+                                        <input
+                                            id="upload-file"
+                                            class="form-control"
+                                            type="file"
+                                            disabled=${!capable()}
+                                            onChange=${(event) => {
+                                                const file =
+                                                    event.currentTarget
+                                                        .files[0];
+                                                setSelected(file);
+                                                if (file)
+                                                    setNewName(
+                                                        safeName(
+                                                            file.name,
+                                                        ).slice(0, 64),
+                                                    );
+                                            }}
+                                        />
+                                        <button
+                                            class="btn btn-primary"
+                                            disabled=${() =>
+                                                !selected() || !capable()}
+                                        >
+                                            <i
+                                                class="bi bi-upload pe-2"
+                                                aria-hidden="true"
+                                            ></i>
+                                            Upload
+                                        </button>
                                     </div>
+                                    <${Show} when=${selected}
+                                        ><div class="mt-2">
+                                            <label
+                                                class="form-label mb-0"
+                                                for="upload-name"
+                                                >Stored filename</label
+                                            ><input
+                                                id="upload-name"
+                                                class="form-control"
+                                                aria-describedby="upload-name-hint"
+                                                value=${newName}
+                                                maxlength="64"
+                                                pattern="[A-Za-z0-9_][A-Za-z0-9_.]*"
+                                                required
+                                                onInput=${(e) =>
+                                                    setNewName(
+                                                        e.currentTarget.value,
+                                                    )}
+                                            />
+                                            <div
+                                                id="upload-name-hint"
+                                                class="form-text small ps-2"
+                                            >
+                                                Allowed file names up to 64
+                                                chars: A-Z a-z 0-9 _ . (no
+                                                leading dot)
+                                            </div>
+                                        </div><//
+                                    >
                                 </form>
                             </section>
                             <${Transfers} scope=${scope} files=${files} />

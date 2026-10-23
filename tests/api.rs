@@ -391,6 +391,70 @@ async fn accounts_are_isolated_and_names_cannot_escape() {
 }
 
 #[tokio::test]
+async fn upload_name_check_fails_before_hashing_for_existing_names() {
+    let h = Harness::new().await;
+    let alice = h.seed("Alice", 100).await;
+    let bob = h.seed("Bob", 100).await;
+    let check = |name| json!({"name":name});
+    let path = "/api/live/uploads/check-name";
+
+    assert_eq!(
+        h.json("POST", path, "", check("free")).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        h.json("POST", path, &alice, check(".hidden")).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        h.json("POST", path, &alice, check("free")).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    let pending = h.start(&alice, "pending", b"data").await;
+    assert_eq!(
+        h.json("POST", path, &alice, check("pending")).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        h.json("POST", path, &bob, check("pending")).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    h.json(
+        "DELETE",
+        &format!("/api/live/uploads/{pending}"),
+        &alice,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        h.json("POST", path, &alice, check("pending")).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    h.file(&alice, "saved", b"data").await;
+    assert_eq!(
+        h.json("POST", path, &alice, check("saved")).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        h.json("POST", path, &bob, check("saved")).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    std::fs::write(
+        h.app.settings.data_dir.join("users/Alice/imported"),
+        b"data",
+    )
+    .unwrap();
+    assert_eq!(
+        h.json("POST", path, &alice, check("imported")).await.0,
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
 async fn quotas_reserve_atomically_and_release_on_cancel() {
     let h = Harness::new().await;
     let cookie = h.seed("Alice", 10).await;

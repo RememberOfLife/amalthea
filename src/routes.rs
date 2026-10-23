@@ -35,6 +35,7 @@ pub fn router(app: State) -> Router {
         .route("/links/{id}", axum::routing::delete(revoke_link))
         .route("/links/{id}/logs", get(logs))
         .route("/uploads", get(transfers::list).post(transfers::start))
+        .route("/uploads/check-name", post(transfers::check_name))
         .route(
             "/uploads/{id}",
             get(transfers::status)

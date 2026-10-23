@@ -208,7 +208,7 @@ export async function upload(file, name, scope, existing) {
     const controller = new AbortController();
     const task = track(key, "upload", controller);
     patch(key, {
-        status: "Calculating file hash",
+        status: existing ? "Calculating file hash" : "Checking filename",
         phase: "client",
         offset: 0,
         active: true,
@@ -223,6 +223,15 @@ export async function upload(file, name, scope, existing) {
             async (lock) => {
                 if (!lock)
                     throw new Error("This upload is active in another tab.");
+                if (!existing) {
+                    await api("/uploads/check-name", {
+                        method: "POST",
+                        body: JSON.stringify({ name }),
+                        signal: controller.signal,
+                    });
+                    controller.signal.throwIfAborted();
+                    patch(key, { status: "Calculating file hash" });
+                }
                 const hash = await hashing(file, controller, (offset) =>
                     patch(key, { offset }),
                 );
