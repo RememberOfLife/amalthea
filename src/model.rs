@@ -29,12 +29,7 @@ pub fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
 }
 pub fn valid_username(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        && ![
-            "api", "assets", "res", "s", "register", "login", "health", "favicon", "index",
-        ]
-        .contains(&name.to_ascii_lowercase().as_str())
+    (1..=64).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 pub fn valid_hash(value: &str) -> bool {
     value.len() == 64
@@ -135,27 +130,24 @@ pub struct LinkRecord {
     pub id: String,
     pub file_id: String,
     #[serde(skip_serializing)]
-    pub token: Option<String>,
+    pub token: String,
     pub label: String,
     pub expires_at: Option<i64>,
     pub revoked_at: Option<i64>,
     pub created_at: i64,
 }
 impl LinkRecord {
-    pub fn public_url(&self, webroot: &str, name: &str) -> Option<String> {
-        self.token.as_ref().map(|token| {
-            let mut url = url::Url::parse(webroot).expect("validated webroot");
-            url.path_segments_mut()
-                .expect("HTTP URL")
-                .pop_if_empty()
-                .extend(["s", token, name]);
-            url.to_string()
-        })
+    pub fn public_url(&self, webroot: &str, name: &str) -> String {
+        let mut url = url::Url::parse(webroot).expect("validated webroot");
+        url.path_segments_mut()
+            .expect("HTTP URL")
+            .pop_if_empty()
+            .extend(["s", &self.token, name]);
+        url.to_string()
     }
     pub fn owner_view(&self, webroot: &str, name: &str) -> serde_json::Value {
         let mut value = serde_json::to_value(self).expect("link record");
         value["url"] = serde_json::json!(self.public_url(webroot, name));
-        value["manage_url"] = serde_json::json!(format!("{webroot}/links/{}", self.id));
         value
     }
     pub fn active(&self) -> bool {

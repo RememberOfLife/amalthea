@@ -21,6 +21,7 @@ pub fn router(app: State) -> Router {
     let api = Router::new()
         .route("/login", post(auth::login))
         .route("/register", post(auth::register))
+        .route("/register/invitation", post(auth::invitation))
         .route("/register/check-username", post(auth::check_username))
         .route("/logout", post(auth::logout))
         .route("/me", get(me))
@@ -152,8 +153,7 @@ async fn page(
         || (matches!(path, "/imprint" | "/imprint/") && imprint.is_some())
         || path == "/login"
         || path == "/register"
-        || (matches!(parts.len(), 2 | 3) && parts[0] == "s")
-        || (parts.len() == 2 && parts[0] == "links");
+        || (matches!(parts.len(), 2 | 3) && parts[0] == "s");
     if !valid {
         let username = match parts.as_slice() {
             ["u", username] => Some(*username),
@@ -439,11 +439,14 @@ async fn delete_link(
     Ok(StatusCode::NO_CONTENT)
 }
 async fn link_logs(app: &State, id: &str) -> Result<Value> {
-    let rows: Vec<(i64,)> = sqlx::query_as("SELECT at FROM access_logs WHERE link_id = ? AND event = 'view' ORDER BY id DESC LIMIT 200")
-        .bind(id).fetch_all(&app.db).await?;
+    let rows: Vec<(i64,)> =
+        sqlx::query_as("SELECT at FROM access_logs WHERE link_id = ? ORDER BY id DESC LIMIT 200")
+            .bind(id)
+            .fetch_all(&app.db)
+            .await?;
     Ok(json!(
         rows.into_iter()
-            .map(|(at,)| json!({"event": "view", "at": at}))
+            .map(|(at,)| json!({"at": at}))
             .collect::<Vec<_>>()
     ))
 }
@@ -475,7 +478,7 @@ async fn public_file(
     token: &str,
     headers: &HeaderMap,
 ) -> Result<(User, FileRecord, LinkRecord, bool)> {
-    let mut link: LinkRecord = sqlx::query_as("SELECT * FROM links WHERE token_hash = ?")
+    let link: LinkRecord = sqlx::query_as("SELECT * FROM links WHERE token_hash = ?")
         .bind(model::hash(token))
         .fetch_optional(&app.db)
         .await?
@@ -501,14 +504,6 @@ async fn public_file(
     if !is_owner {
         file.require_complete()?;
     }
-    if link.token.is_none() {
-        sqlx::query("UPDATE links SET token = ? WHERE id = ? AND token IS NULL")
-            .bind(token)
-            .bind(&link.id)
-            .execute(&app.db)
-            .await?;
-        link.token = Some(token.to_owned());
-    }
     Ok((user, file, link, is_owner))
 }
 async fn public_meta(
@@ -522,7 +517,7 @@ async fn public_meta(
         return Ok(Json(owner_link_meta(&app, &file, &link).await?));
     }
     if method != Method::HEAD {
-        sqlx::query("INSERT INTO access_logs (link_id, event, at) VALUES (?, 'view', ?)")
+        sqlx::query("INSERT INTO access_logs (link_id, at) VALUES (?, ?)")
             .bind(link.id)
             .bind(model::now())
             .execute(&app.db)

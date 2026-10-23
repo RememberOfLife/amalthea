@@ -17,13 +17,18 @@ cargo build --release --locked
 ./target/release/amalthea server
 ```
 
-Open `http://localhost:8080`. To use, create a default invitation:
+Open `http://localhost:8080`. Create an invitation for a username:
 ```sh
-./target/release/amalthea user create
+./target/release/amalthea user create zeus
 ```
 
-Open the generated registration link to register an account with username and password.
+Open the generated registration link to choose a password and create the account.
 Invitations are single-use. There are no administrator accounts or email addresses.
+
+To let the recipient choose their username instead:
+```sh
+./target/release/amalthea user create --any-username
+```
 
 Other useful things:
 ```sh

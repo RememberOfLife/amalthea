@@ -131,6 +131,68 @@ pub async fn login(
     .await
 }
 
+#[derive(sqlx::FromRow)]
+struct Invitation {
+    username: Option<String>,
+    quota_bytes: i64,
+}
+impl Invitation {
+    fn allows(&self, username: &str) -> bool {
+        self.username
+            .as_deref()
+            .is_none_or(|assigned| assigned == username)
+    }
+}
+
+async fn load_invitation(app: &State, token_hash: &str) -> Result<Invitation> {
+    sqlx::query_as(
+        "SELECT username, quota_bytes FROM invitations WHERE token_hash = ? AND expires_at > ?",
+    )
+    .bind(token_hash)
+    .bind(model::now())
+    .fetch_optional(&app.db)
+    .await?
+    .ok_or_else(|| Error::bad("Invitation is invalid, expired or already used"))
+}
+
+#[derive(Deserialize)]
+pub struct InvitationCheck {
+    token: String,
+}
+
+pub async fn invitation(
+    AxumState(app): AxumState<State>,
+    Json(input): Json<InvitationCheck>,
+) -> Result<Json<serde_json::Value>> {
+    let invitation = load_invitation(&app, &model::hash(&input.token)).await?;
+    Ok(Json(serde_json::json!({ "username": invitation.username })))
+}
+
+pub async fn username_available(
+    app: &State,
+    connection: &mut sqlx::SqliteConnection,
+    username: &str,
+    invitation_hash: &str,
+) -> Result<bool> {
+    if !model::valid_username(username) {
+        return Ok(false);
+    }
+    let occupied: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?) OR EXISTS(SELECT 1 FROM invitations WHERE username = ? AND expires_at > ? AND token_hash != ?)",
+    )
+    .bind(username).bind(username).bind(model::now()).bind(invitation_hash)
+    .fetch_one(connection).await?;
+    if occupied {
+        return Ok(false);
+    }
+    let directory = app.settings.data_dir.join("users").join(username);
+    match tokio::fs::symlink_metadata(directory).await {
+        Ok(_) => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct UsernameCheck {
     token: String,
@@ -141,31 +203,11 @@ pub async fn check_username(
     AxumState(app): AxumState<State>,
     Json(input): Json<UsernameCheck>,
 ) -> Result<Json<serde_json::Value>> {
-    let invited: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM invitations WHERE token_hash = ? AND expires_at > ?)",
-    )
-    .bind(model::hash(&input.token))
-    .bind(model::now())
-    .fetch_one(&app.db)
-    .await?;
-    if !invited {
-        return Err(Error::bad("Invitation is invalid, expired or already used"));
-    }
-    let mut available = model::valid_username(&input.username);
-    if available {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)")
-                .bind(&input.username)
-                .fetch_one(&app.db)
-                .await?;
-        let directory = app.settings.data_dir.join("users").join(&input.username);
-        let occupied = match tokio::fs::symlink_metadata(directory).await {
-            Ok(_) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(e.into()),
-        };
-        available = !exists && !occupied;
-    }
+    let token_hash = model::hash(&input.token);
+    let invitation = load_invitation(&app, &token_hash).await?;
+    let mut connection = app.db.acquire().await?;
+    let available = invitation.allows(&input.username)
+        && username_available(&app, &mut connection, &input.username, &token_hash).await?;
     Ok(Json(serde_json::json!({ "available": available })))
 }
 
@@ -180,23 +222,15 @@ pub async fn register(
     Json(input): Json<Registration>,
 ) -> Result<Response> {
     if !model::valid_username(&input.username) {
-        return Err(Error::bad(
-            "Use 1–64 letters, numbers or underscores; this username may be reserved",
-        ));
+        return Err(Error::bad("Use 1–64 letters, numbers or underscores"));
     }
     if !(12..=1024).contains(&input.password.len()) {
         return Err(Error::bad("Password must contain 12–1024 bytes"));
     }
     let token_hash = model::hash(&input.token);
-    let quota: Option<i64> = sqlx::query_scalar(
-        "SELECT quota_bytes FROM invitations WHERE token_hash = ? AND expires_at > ?",
-    )
-    .bind(&token_hash)
-    .bind(model::now())
-    .fetch_optional(&app.db)
-    .await?;
-    if quota.is_none() {
-        return Err(Error::bad("Invitation is invalid, expired or already used"));
+    let invitation = load_invitation(&app, &token_hash).await?;
+    if !invitation.allows(&input.username) {
+        return Err(Error::bad("Username must match the invitation"));
     }
     let _permit = app.password_jobs.try_acquire().map_err(|_| {
         Error(
@@ -212,23 +246,25 @@ pub async fn register(
     })
     .await??;
     let _guard = app.mutation.lock().await;
-    let mut tx = app.db.begin().await?;
-    let quota: Option<i64> = sqlx::query_scalar(
-        "DELETE FROM invitations WHERE token_hash = ? AND expires_at > ? RETURNING quota_bytes",
+    let mut tx = app.db.begin_with("BEGIN IMMEDIATE").await?;
+    let invitation: Invitation = sqlx::query_as(
+        "DELETE FROM invitations WHERE token_hash = ? AND expires_at > ? RETURNING username, quota_bytes",
     )
     .bind(&token_hash)
     .bind(model::now())
     .fetch_optional(&mut *tx)
-    .await?;
-    let quota =
-        quota.ok_or_else(|| Error::bad("Invitation is invalid, expired or already used"))?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)")
-        .bind(&input.username)
-        .fetch_one(&mut *tx)
-        .await?;
-    if exists {
-        return Err(Error::conflict("Username is already taken"));
+    .await?
+    .ok_or_else(|| Error::bad("Invitation is invalid, expired or already used"))?;
+    // Verify the binding again inside the transaction that consumes the invitation.
+    if !invitation.allows(&input.username) {
+        return Err(Error::bad("Username must match the invitation"));
     }
+    if !username_available(&app, &mut tx, &input.username, &token_hash).await? {
+        return Err(Error::conflict(
+            "Username is already taken, assigned to another invitation, or has an existing data directory",
+        ));
+    }
+    let quota = invitation.quota_bytes;
     let dir = app.settings.data_dir.join("users").join(&input.username);
     // Never adopt an existing folder into a new account.
     tokio::fs::create_dir(&dir).await.map_err(|e| {

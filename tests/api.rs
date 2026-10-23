@@ -190,17 +190,28 @@ async fn registration_username_availability() {
     h.seed("Taken", 100).await;
     std::fs::create_dir(h.app.settings.data_dir.join("users/orphan")).unwrap();
     let token = model::secret();
-    sqlx::query("INSERT INTO invitations (token_hash, quota_bytes, expires_at) VALUES (?,?,?)")
-        .bind(model::hash(&token))
-        .bind(100)
-        .bind(model::now() + 1000)
-        .execute(&h.app.db)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO invitations (token_hash, token, quota_bytes, expires_at) VALUES (?,?,?,?)",
+    )
+    .bind(model::hash(&token))
+    .bind(&token)
+    .bind(100)
+    .bind(model::now() + 1000)
+    .execute(&h.app.db)
+    .await
+    .unwrap();
     for (username, available) in [
         ("new_user", true),
         ("taken", false),
-        ("LOGIN", false),
+        ("LOGIN", true),
+        ("api", true),
+        ("assets", true),
+        ("res", true),
+        ("s", true),
+        ("register", true),
+        ("health", true),
+        ("favicon", true),
+        ("index", true),
         ("bad-id", false),
         ("../escape", false),
         ("", false),
@@ -235,16 +246,71 @@ async fn registration_username_availability() {
 }
 
 #[tokio::test]
+async fn registration_accepts_usernames_matching_top_level_routes() {
+    let h = Harness::new().await;
+    for username in ["login", "api"] {
+        let token = model::secret();
+        sqlx::query("INSERT INTO invitations (token_hash, token, quota_bytes, expires_at) VALUES (?, ?, 100, ?)")
+            .bind(model::hash(&token)).bind(&token).bind(model::now() + 60)
+            .execute(&h.app.db).await.unwrap();
+        let password = "a long correct password";
+        let (status, headers, _) = h
+            .request(
+                "POST",
+                "/api/live/register",
+                "",
+                serde_json::to_vec(
+                    &json!({"token": token, "username": username, "password": password}),
+                )
+                .unwrap(),
+                &[("content-type", "application/json")],
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let cookie = headers["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        assert_eq!(
+            h.request("GET", &format!("/u/{username}/"), cookie, vec![], &[])
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            h.json(
+                "POST",
+                "/api/live/login",
+                "",
+                json!({"username": username, "password": password})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        h.request("GET", "/login", "", vec![], &[]).await.0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn invitation_registration_login_and_logout() {
     let h = Harness::with_prefix("/files").await;
     let invite = model::secret();
-    sqlx::query("INSERT INTO invitations (token_hash, quota_bytes, expires_at) VALUES (?,?,?)")
-        .bind(model::hash(&invite))
-        .bind(12345)
-        .bind(model::now() + 60)
-        .execute(&h.app.db)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO invitations (token_hash, token, quota_bytes, expires_at) VALUES (?,?,?,?)",
+    )
+    .bind(model::hash(&invite))
+    .bind(&invite)
+    .bind(12345)
+    .bind(model::now() + 60)
+    .execute(&h.app.db)
+    .await
+    .unwrap();
     let input = json!({"username":"Alice","password":"a long correct password","token":invite});
     let (status, headers, body) = h
         .request(
@@ -652,17 +718,22 @@ async fn retrievable_links_revoke_delete_and_keep_owner_only_logs() {
         .find(|row| row["id"] == link)
         .unwrap();
     assert_eq!(saved["url"], expected_url);
-    assert_eq!(
-        saved["manage_url"],
-        format!("https://example.test/share/links/{link}")
-    );
     assert!(saved.get("token").is_none());
-    // Both page URLs work under a configured prefix.
-    for path in [
-        format!("/s/{token}/a.txt"),
-        format!("/s/{token}"),
-        format!("/links/{link}"),
-    ] {
+    assert!(
+        sqlx::query("UPDATE links SET token = NULL WHERE id = ?")
+            .bind(&link)
+            .execute(&h.app.db)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        h.request("GET", &format!("/links/{link}"), &cookie, vec![], &[])
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    // Share URLs work with and without the filename under a configured prefix.
+    for path in [format!("/s/{token}/a.txt"), format!("/s/{token}")] {
         assert_eq!(
             h.request("GET", &path, &cookie, vec![], &[]).await.0,
             StatusCode::OK
@@ -719,13 +790,6 @@ async fn retrievable_links_revoke_delete_and_keep_owner_only_logs() {
         .await
         .unwrap();
     assert_eq!(count, 2);
-    // Historic chunk entries are retained but excluded from the access log.
-    sqlx::query("INSERT INTO access_logs (link_id, event, at) VALUES (?, 'download', ?)")
-        .bind(&link)
-        .bind(model::now())
-        .execute(&h.app.db)
-        .await
-        .unwrap();
     let (status, logs) = h
         .json("GET", &format!("{private}/logs"), &cookie, Value::Null)
         .await;
@@ -735,7 +799,7 @@ async fn retrievable_links_revoke_delete_and_keep_owner_only_logs() {
         logs.as_array()
             .unwrap()
             .iter()
-            .all(|row| row["event"] == "view" && row.get("range_start").is_none())
+            .all(|row| row.as_object().unwrap().len() == 1 && row["at"].is_i64())
     );
     for (method, path) in [
         ("GET", private.clone()),
@@ -879,16 +943,11 @@ async fn retrievable_links_revoke_delete_and_keep_owner_only_logs() {
 }
 
 #[tokio::test]
-async fn legacy_share_links_recover_their_url_and_survive_renaming() {
+async fn saved_share_links_remain_retrievable_after_renaming() {
     let h = Harness::new().await;
     let cookie = h.seed("Alice", 100).await;
     let id = h.file(&cookie, "before.txt", b"hello").await;
     let (link, token) = h.link(&cookie, &id).await;
-    sqlx::query("UPDATE links SET token = NULL WHERE id = ?")
-        .bind(&link)
-        .execute(&h.app.db)
-        .await
-        .unwrap();
     let (status, meta) = h
         .json(
             "GET",
@@ -898,8 +957,10 @@ async fn legacy_share_links_recover_their_url_and_survive_renaming() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(meta["link"]["url"].is_null());
-    assert!(meta["link"]["manage_url"].is_string());
+    assert_eq!(
+        meta["link"]["url"],
+        format!("https://example.test/s/{token}/before.txt")
+    );
     assert_eq!(
         h.json("GET", &format!("/api/live/public/{token}"), "", Value::Null)
             .await
@@ -1527,6 +1588,7 @@ async fn cli_quota_changes_preserve_existing_data_and_block_completion() {
             config.to_str().unwrap(),
             "user",
             "create",
+            "--any-username",
             "--quota",
             "200",
             "--expires-hours",
@@ -1598,7 +1660,7 @@ async fn cli_accepts_readable_quotas_and_prints_both_units() {
         );
     }
     assert!(cli(&["user", "list"]).contains("Alice\t53687091200 (50 GiB)\t0 (0 B)\t0 (0 B)"));
-    cli(&["user", "create", "--quota", "1.5G"]);
+    cli(&["user", "create", "--any-username", "--quota", "1.5G"]);
     let quota: i64 = sqlx::query_scalar("SELECT quota_bytes FROM invitations")
         .fetch_one(&h.app.db)
         .await

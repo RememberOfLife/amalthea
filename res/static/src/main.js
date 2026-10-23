@@ -140,15 +140,13 @@ function App() {
     const [filter, setFilter] = createSignal("");
     const path = location.pathname.slice(base.length);
     const token = path.startsWith("/s/") ? path.split("/")[2] : null;
-    const managedLink = path.startsWith("/links/") ? path.split("/")[2] : null;
-    const linkPage = Boolean(token || managedLink);
+    const linkPage = Boolean(token);
     const unavailable = () => Boolean(pageError());
     const refreshShared = async () => {
-        const id = shared()?.link?.id || managedLink;
+        const id = shared()?.link?.id;
         setShared(await api(id ? `/links/${id}` : `/public/${token}`));
     };
-    const sharedContent = () =>
-        token ? `/public/${token}/content` : `/files/${shared()?.id}/content`;
+    const sharedContent = () => `/public/${token}/content`;
     const registration = path === "/register";
     const imprint = !unavailable() && (path === "/imprint" || path === "/imprint/");
     const invitation = location.hash.slice(1);
@@ -210,13 +208,12 @@ function App() {
         try {
             if (linkPage) {
                 await refreshShared();
-                setScope(token ? `share:${token}` : `link:${managedLink}`);
-                if (token)
-                    history.replaceState(
-                        null,
-                        "",
-                        `${base}/s/${token}/${encodeURIComponent(shared().name)}`,
-                    );
+                setScope(`share:${token}`);
+                history.replaceState(
+                    null,
+                    "",
+                    `${base}/s/${token}/${encodeURIComponent(shared().name)}`,
+                );
             } else if (!registration) {
                 await refresh();
                 history.replaceState(
@@ -897,20 +894,69 @@ function App() {
     `;
 }
 
+function PasswordInput(props) {
+    const [visible, setVisible] = createSignal(false);
+    const toggleLabel = () =>
+        `${visible() ? "Hide" : "Show"} ${props.id === "password-confirmation" ? "confirmation password" : "password"}`;
+    return html`<div class="input-group">
+        <input
+            class="form-control"
+            id=${props.id}
+            name=${props.id}
+            type=${() => (visible() ? "text" : "password")}
+            autocomplete=${props.autocomplete}
+            minlength=${props.minlength}
+            maxlength="1024"
+            required
+        />
+        <button
+            class="btn btn-outline-secondary"
+            type="button"
+            aria-label=${toggleLabel}
+            aria-controls=${props.id}
+            title=${toggleLabel}
+            onClick=${() => setVisible((value) => !value)}
+        >
+            <i
+                class=${() => (visible() ? "bi bi-eye-slash" : "bi bi-eye")}
+                aria-hidden="true"
+            ></i>
+        </button>
+    </div>`;
+}
+
 function AuthForm(props) {
     const [busy, setBusy] = createSignal(false);
+    const [invitationReady, setInvitationReady] = createSignal(!props.registration);
+    const [assignedUsername, setAssignedUsername] = createSignal(null);
     const [idStatus, setIdStatus] = createSignal("idle");
     const idStatuses = {
         idle: ["secondary", "<>", "Enter a UserId"],
         checking: ["secondary", "...", "Checking availability"],
         available: ["success", "OK", "UserId is available"],
+        assigned: ["success", "OK", "UserId is assigned by this invitation"],
         unavailable: ["danger", "N/A", "UserId is invalid or unavailable"],
         error: ["warning", "?", "Could not check availability; try again"],
     };
     let idTimer;
     let idVersion = 0;
+    onMount(async () => {
+        if (!props.registration || !props.invitation) return;
+        try {
+            const invitation = await api(
+                "/register/invitation",
+                json("POST", { token: props.invitation }),
+            );
+            setAssignedUsername(invitation.username);
+            if (invitation.username) setIdStatus("assigned");
+            setInvitationReady(true);
+        } catch (error) {
+            setIdStatus("error");
+            reportError(error);
+        }
+    });
     const checkId = (event) => {
-        if (!props.registration) return;
+        if (!props.registration || !invitationReady() || assignedUsername()) return;
         const username = event.currentTarget.value;
         const version = ++idVersion;
         clearTimeout(idTimer);
@@ -962,6 +1008,7 @@ function AuthForm(props) {
                 onInput=${(event) => validateConfirmation(event.currentTarget)}
                 onSubmit=${(event) => {
                     event.preventDefault();
+                    if (!invitationReady() || busy()) return;
                     validateConfirmation(event.currentTarget);
                     if (!event.currentTarget.reportValidity()) return;
                     const values = new FormData(event.currentTarget);
@@ -970,7 +1017,7 @@ function AuthForm(props) {
                         const account = await api(
                             props.registration ? "/register" : "/login",
                             json("POST", {
-                                username: values.get("username"),
+                                username: assignedUsername() ?? values.get("username"),
                                 password: values.get("password"),
                                 ...(props.registration
                                     ? { token: props.invitation }
@@ -1002,6 +1049,8 @@ function AuthForm(props) {
                     class="form-control"
                     id="username"
                     name="username"
+                    value=${() => assignedUsername() ?? ""}
+                    disabled=${() => !invitationReady() || assignedUsername() !== null}
                     onInput=${checkId}
                     aria-describedby=${props.registration
                         ? "username-status"
@@ -1014,17 +1063,12 @@ function AuthForm(props) {
                 <label class="form-label mt-3 mb-1" for="password"
                     ><span class="text-body-secondary">User</span
                     ><b>Secret</b></label
-                ><input
-                    class="form-control"
+                ><${PasswordInput}
                     id="password"
-                    name="password"
-                    type="password"
                     autocomplete=${props.registration
                         ? "new-password"
                         : "current-password"}
                     minlength=${props.registration ? 12 : 1}
-                    maxlength="1024"
-                    required
                 />
                 ${props.registration &&
                 html`<p
@@ -1038,20 +1082,15 @@ function AuthForm(props) {
                         for="password-confirmation"
                         ><span class="text-body-secondary">Confirm User</span
                         ><b>Secret</b></label
-                    ><input
-                        class="form-control"
+                    ><${PasswordInput}
                         id="password-confirmation"
-                        name="password-confirmation"
-                        type="password"
                         autocomplete="new-password"
                         minlength="12"
-                        maxlength="1024"
-                        required
                     />`}
                 <button
                     class="btn btn-primary w-100 py-2 mt-3"
                     type="submit"
-                    disabled=${busy}
+                    disabled=${() => busy() || !invitationReady()}
                 >
                     ${() =>
                         busy()
@@ -1171,13 +1210,9 @@ function LinkActions(props) {
         >
             <button
                 class="btn btn-sm btn-outline-primary"
-                disabled=${() => busy() || !props.link.url}
+                disabled=${busy}
                 title=${() =>
-                    props.link.url
-                        ? copied()
-                            ? "Link copied"
-                            : "Copy sharing link"
-                        : "Open the original link once to recover its URL"}
+                    copied() ? "Link copied" : "Copy sharing link"}
                 aria-label=${() =>
                     copied() ? "Link copied" : "Copy sharing link"}
                 onClick=${() =>
@@ -1232,11 +1267,6 @@ function LinkActions(props) {
                 >
             </button>
         </div>
-        <${Show} when=${() => !props.link.url}>
-            <p class="small text-body-secondary mt-2 mb-0">
-                Open the original link once to make it copyable.
-            </p>
-        <//>
         <${Show} when=${confirmDelete}>
             <${Modal}
                 title="Delete sharing link?"
@@ -1391,7 +1421,7 @@ function ShareModal(props) {
                         ${(link) =>
                             html`<tr>
                                 <td>
-                                    <a href=${link.url || link.manage_url}
+                                    <a href=${link.url}
                                         >${link.label || "Unlabelled link"}</a
                                     >
                                 </td>

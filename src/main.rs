@@ -1,5 +1,5 @@
 use amalthea::size::{format_size, parse_size};
-use amalthea::{App, configuration::Settings, model, storage};
+use amalthea::{App, auth, configuration::Settings, model, storage};
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
@@ -41,6 +41,15 @@ enum InviteCommand {
 enum UserCommand {
     /// Print a single-use registration URL. No account is created until it is used.
     Create {
+        /// Reserve this username; the recipient chooses only a password.
+        #[arg(
+            required_unless_present = "any_username",
+            conflicts_with = "any_username"
+        )]
+        username: Option<String>,
+        /// Let the recipient choose any available username.
+        #[arg(long)]
+        any_username: bool,
         #[arg(long, value_parser = parse_size, value_name = "SIZE")]
         quota: Option<i64>,
         #[arg(long, default_value_t = 72)]
@@ -71,30 +80,34 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Invite { command } => match command {
             InviteCommand::Url { id } => {
-                let token: Option<Option<String>> =
+                let token: Option<String> =
                     sqlx::query_scalar("SELECT token FROM invitations WHERE token_hash = ?")
                         .bind(id)
                         .fetch_optional(&app.db)
                         .await?;
-                let token = token.context("unknown invitation (it may have been used or removed)")?
-                    .context("This invitation predates saved links; use the original URL or create a new invitation")?;
+                let token =
+                    token.context("unknown invitation (it may have been used or removed)")?;
                 println!("{}/register#{}", settings.webroot, token);
             }
             InviteCommand::List => {
-                let invitations: Vec<(String, i64, String, i64)> = sqlx::query_as(
-                    "SELECT token_hash, quota_bytes, datetime(expires_at, 'unixepoch'), expires_at FROM invitations ORDER BY expires_at, token_hash",
+                let invitations: Vec<(String, Option<String>, i64, String, i64)> = sqlx::query_as(
+                    "SELECT token_hash, username, quota_bytes, datetime(expires_at, 'unixepoch'), expires_at FROM invitations ORDER BY expires_at, token_hash",
                 )
                 .fetch_all(&app.db)
                 .await?;
                 let now = model::now();
-                println!("ID\tQUOTA\tEXPIRES_AT_UTC\tSTATUS");
-                for (id, quota, expires, expires_at) in invitations {
+                println!("ID\tUSERNAME\tQUOTA\tEXPIRES_AT_UTC\tSTATUS");
+                for (id, username, quota, expires, expires_at) in invitations {
                     let status = if expires_at > now {
                         "active"
                     } else {
                         "expired"
                     };
-                    println!("{id}\t{}\t{expires}\t{status}", format_size(quota));
+                    println!(
+                        "{id}\t{}\t{}\t{expires}\t{status}",
+                        username.as_deref().unwrap_or("-"),
+                        format_size(quota)
+                    );
                 }
             }
             InviteCommand::Revoke { id } => {
@@ -178,6 +191,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::User { command } => match command {
             UserCommand::Create {
+                username,
+                any_username: _,
                 quota,
                 expires_hours,
             } => {
@@ -186,8 +201,25 @@ async fn main() -> anyhow::Result<()> {
                 if !(1..=87600).contains(&expires_hours) {
                     bail!("expires-hours must be between 1 and 87600");
                 }
+                // Hold the SQLite writer lock through validation and insertion,
+                // including when the CLI runs alongside the server.
+                let mut tx = app.db.begin_with("BEGIN IMMEDIATE").await?;
+                if let Some(username) = &username {
+                    if !model::valid_username(username) {
+                        bail!("username must contain 1–64 letters, numbers or underscores");
+                    }
+                    if !auth::username_available(&app, &mut tx, username, "")
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e.1))?
+                    {
+                        bail!(
+                            "username is already taken, assigned to an invitation, or has an existing data directory"
+                        );
+                    }
+                }
                 let token = model::secret();
-                sqlx::query("INSERT INTO invitations (token_hash, token, quota_bytes, expires_at) VALUES (?, ?, ?, ?)").bind(model::hash(&token)).bind(&token).bind(quota).bind(model::now() + expires_hours * 3600).execute(&app.db).await?;
+                sqlx::query("INSERT INTO invitations (token_hash, token, username, quota_bytes, expires_at) VALUES (?, ?, ?, ?, ?)").bind(model::hash(&token)).bind(&token).bind(username).bind(quota).bind(model::now() + expires_hours * 3600).execute(&mut *tx).await?;
+                tx.commit().await?;
                 println!("{}/register#{}", settings.webroot, token);
             }
             UserCommand::Quota { username, bytes } => {
