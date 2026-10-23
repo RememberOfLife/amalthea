@@ -28,7 +28,8 @@ Invitations are single-use. There are no administrator accounts or email address
 Other useful things:
 ```sh
 ./target/release/amalthea invite list
-./target/release/amalthea invite revoke <ID> # invite list ID
+./target/release/amalthea invite url <ID> # retrieve URL
+./target/release/amalthea invite revoke <ID>
 ./target/release/amalthea user list
 ./target/release/amalthea user quota zeus # show quota
 ./target/release/amalthea user quota zeus 2G # set quota
@@ -41,8 +42,7 @@ uploads are blocked when usage plus reservations exceeds the quota.
 ## Sharing and Transfers
 
 - Create multiple independent sharing links per file, with optional expiry,
-  revocation, and access logs. Copy each link when creating it: only its token
-  hash is stored on the server. Renaming keeps links working.
+  revocation and access logs.
 - Uploads reserve their full size and transfer in checksummed 4 MiB chunks.
   Pause/resume and per-transfer speed limits are available. After a browser
   restart, reselect the original file; its full SHA-256 must match.

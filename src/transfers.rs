@@ -354,7 +354,6 @@ pub async fn content(
     record: FileRecord,
     headers: HeaderMap,
     method: Method,
-    link_id: Option<String>,
 ) -> Result<Response> {
     record.require_complete()?;
     let file = storage::open_regular(&storage::user_dir(app, user)?.join(record.disk_name()?))?;
@@ -396,11 +395,6 @@ pub async fn content(
     } else {
         (StatusCode::OK, 0, size)
     };
-    if method != Method::HEAD
-        && let Some(id) = link_id
-    {
-        sqlx::query("INSERT INTO access_logs (link_id, event, at, range_start, range_end) VALUES (?, 'download', ?, ?, ?)").bind(id).bind(model::now()).bind(start as i64).bind((start + length).checked_sub(1).map(|n| n as i64)).execute(&app.db).await?;
-    }
     let body = if method == Method::HEAD {
         Body::empty()
     } else {

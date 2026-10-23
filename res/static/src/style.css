@@ -20,6 +20,17 @@ body {
 .imprint {
     max-width: 540px;
 }
+.workspace-container.workspace-unavailable {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.workspace-error {
+    width: 100%;
+    max-width: 640px;
+}
 .container {
     max-width: 1080px;
 }
@@ -78,6 +89,9 @@ body {
 .filename {
     overflow-wrap: anywhere;
     word-break: break-word;
+}
+.shared-file-actions > .btn {
+    flex-grow: 1;
 }
 .file-row {
     display: flex;

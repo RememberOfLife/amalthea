@@ -36,8 +36,20 @@ const run = async (action) => {
         setError(e.message);
     }
 };
-const date = (seconds) =>
-    seconds ? new Date(seconds * 1000).toLocaleString() : "Never";
+const date = (seconds) => {
+    if (seconds == null) return "Never";
+    const value = new Date(seconds * 1000);
+    const pad = (part) => String(part).padStart(2, "0");
+    const day = [
+        value.getFullYear(),
+        pad(value.getMonth() + 1),
+        pad(value.getDate()),
+    ].join("-");
+    const time = [value.getHours(), value.getMinutes(), value.getSeconds()]
+        .map(pad)
+        .join(":");
+    return `${day} ${time}`;
+};
 const capable = () =>
     !!(
         window.isSecureContext &&
@@ -111,6 +123,7 @@ function App() {
     const [files, setFiles] = createSignal([]);
     const [notice, setNotice] = createSignal("");
     const [loading, setLoading] = createSignal(true);
+    const [pageError, setPageError] = createSignal();
     const [shared, setShared] = createSignal();
     const [scope, setScope] = createSignal("");
     const [selected, setSelected] = createSignal();
@@ -121,6 +134,15 @@ function App() {
     const [filter, setFilter] = createSignal("");
     const path = location.pathname.slice(base.length);
     const token = path.startsWith("/s/") ? path.split("/")[2] : null;
+    const managedLink = path.startsWith("/links/") ? path.split("/")[2] : null;
+    const linkPage = Boolean(token || managedLink);
+    const unavailable = () => Boolean(pageError());
+    const refreshShared = async () => {
+        const id = shared()?.link?.id || managedLink;
+        setShared(await api(id ? `/links/${id}` : `/public/${token}`));
+    };
+    const sharedContent = () =>
+        token ? `/public/${token}/content` : `/files/${shared()?.id}/content`;
     const registration = path === "/register";
     const imprint = path === "/imprint" || path === "/imprint/";
     const invitation = location.hash.slice(1);
@@ -174,15 +196,15 @@ function App() {
             return;
         }
         try {
-            if (token) {
-                const file = await api(`/public/${token}`);
-                setShared(file);
-                setScope(`share:${token}`);
-                history.replaceState(
-                    null,
-                    "",
-                    `${base}/s/${token}/${file.name}`,
-                );
+            if (linkPage) {
+                await refreshShared();
+                setScope(token ? `share:${token}` : `link:${managedLink}`);
+                if (token)
+                    history.replaceState(
+                        null,
+                        "",
+                        `${base}/s/${token}/${encodeURIComponent(shared().name)}`,
+                    );
             } else if (!registration) {
                 await refresh();
                 history.replaceState(
@@ -192,14 +214,16 @@ function App() {
                 );
             }
         } catch (e) {
-            if (e.status !== 401 || token) setError(e.message);
+            if (linkPage)
+                setPageError({ status: e.status, message: e.message });
+            else if (e.status !== 401) setError(e.message);
         } finally {
             setLoading(false);
         }
     });
     let polling = false;
     const filePoll = setInterval(async () => {
-        if (!me() || token || polling) return;
+        if (!me() || linkPage || polling) return;
         polling = true;
         try {
             await refreshFiles();
@@ -224,9 +248,7 @@ function App() {
             if (navigator.storage.persist) await navigator.storage.persist();
             await download(
                 file,
-                token
-                    ? `/public/${token}/content`
-                    : `/files/${file.id}/content`,
+                linkPage ? sharedContent() : `/files/${file.id}/content`,
                 scope(),
             );
         });
@@ -272,7 +294,8 @@ function App() {
             </nav>
         </header>
         <main
-            class=${`container py-4${!imprint ? " workspace-container" : ""}`}
+            class=${() =>
+                `container py-4${!imprint ? " workspace-container" : ""}${unavailable() ? " workspace-unavailable" : ""}`}
         >
             <${Show} when=${imprint}>
                 <section
@@ -282,13 +305,43 @@ function App() {
                 ></section>
             <//>
             <${Show} when=${!imprint}>
-                ${alert}
+                <${Show} when=${unavailable}>
+                    <section
+                        class="workspace-error text-center"
+                        role="alert"
+                        aria-labelledby="page-error-title"
+                    >
+                        <p
+                            class="display-4 fw-semibold text-body-secondary mb-3"
+                        >
+                            ${() => pageError()?.status || "Error"}
+                        </p>
+                        <h1 id="page-error-title" class="h3">
+                            ${() =>
+                                pageError()?.status === 404
+                                    ? "Not found or no longer available"
+                                    : pageError()?.status === 401
+                                      ? "Sign in required"
+                                      : "Unable to open link"}
+                        </h1>
+                        <p class="text-body-secondary mb-4">
+                            ${() =>
+                                pageError()?.status === 404
+                                    ? "This link may have expired, been revoked, or been deleted."
+                                    : pageError()?.message}
+                        </p>
+                        <a class="btn btn-primary" href=${`${base}/`}
+                            >Back to home</a
+                        >
+                    </section>
+                <//>
+                <${Show} when=${() => !unavailable()}>${alert}<//>
                 ${() =>
                     notice() &&
                     html`<div class="alert alert-info" role="status">
                         ${notice}
                     </div>`}
-                <div class="workspace">
+                <div class="workspace" hidden=${unavailable}>
                     <${Show}
                         when=${() => !loading()}
                         fallback=${html`<p role="status">Loading...</p>`}
@@ -300,7 +353,7 @@ function App() {
                                 Chrome browser over HTTPS (or localhost). Direct
                                 downloads remain available.
                             </p>`}
-                        <${Show} when=${() => !me() && !token}
+                        <${Show} when=${() => !me() && !linkPage}
                             ><${AuthForm}
                                 registration=${registration}
                                 invitation=${invitation}
@@ -311,33 +364,64 @@ function App() {
                                     ${() => shared()?.name}
                                 </h1>
                                 <p>${() => bytes(shared()?.size)}</p>
-                                <div class="d-flex flex-wrap gap-2">
-                                    <button
-                                        class="btn btn-primary"
-                                        disabled=${!capable()}
-                                        onClick=${() => doDownload(shared())}
+                                <${Show} when=${() => shared()?.link}>
+                                    <p class="small">
+                                        ${() => linkStatus(shared().link)}
+                                    </p>
+                                    <div class="mb-3">
+                                        <${LinkActions}
+                                            link=${() => shared().link}
+                                            refresh=${(_) => refreshShared()}
+                                            deleted=${(_) => {
+                                                pauseAll();
+                                                setShared();
+                                                setNotice(
+                                                    "Sharing link and access log deleted. The file is still in your files.",
+                                                );
+                                            }}
+                                        />
+                                    </div>
+                                <//>
+                                <${Show}
+                                    when=${() =>
+                                        shared()?.can_download !== false}
+                                >
+                                    <div
+                                        class="shared-file-actions d-flex flex-wrap gap-2"
                                     >
-                                        <i
-                                            class="bi bi-download pe-1"
-                                            aria-hidden="true"
-                                        ></i>
-                                        Download with resume
-                                    </button>
-                                    <a
-                                        class="btn btn-outline-secondary"
-                                        href=${endpoint(
-                                            `/public/${token}/content`,
-                                        )}
-                                        >Direct download</a
+                                        <button
+                                            class="btn btn-primary"
+                                            disabled=${!capable()}
+                                            onClick=${() =>
+                                                doDownload(shared())}
+                                        >
+                                            <i
+                                                class="bi bi-download me-2"
+                                                aria-hidden="true"
+                                            ></i>
+                                            Download with resume
+                                        </button>
+                                        <a
+                                            class="btn btn-outline-secondary"
+                                            href=${() =>
+                                                endpoint(sharedContent())}
+                                            >Direct download</a
+                                        >
+                                    </div>
+                                    <p
+                                        class="small text-body-secondary mt-2 mb-0"
                                     >
-                                </div>
-                                <p class="small text-body-secondary mt-3 mb-0">
-                                    The resumable download stays in this browser
-                                    until you remove it from browser storage,
-                                    including after saving a copy. Anyone with
-                                    this link can download until it expires or
-                                    is revoked.
-                                </p>
+                                        The resumable download occupies browser
+                                        storage until removed, even after its
+                                        done.
+                                    </p>
+                                <//>
+                                <${Show} when=${() => shared()?.link}>
+                                    <${AccessLog}
+                                        rows=${() => shared()?.access_log || []}
+                                        refresh=${(_) => refreshShared()}
+                                    />
+                                <//>
                             </section>
                         <//>
                         <${Show} when=${me}>
@@ -750,11 +834,21 @@ function App() {
                             >imprint</a
                         >
                     <//>
-                    <a
-                        class="link-secondary"
-                        href="https://github.com/RememberOfLife/amalthea"
-                        >open-source</a
+                    <div
+                        class="d-flex flex-wrap justify-content-end align-items-center gap-2 text-secondary"
                     >
+                        <span
+                            >Amalthea
+                            v${document.querySelector(
+                                'meta[name="amalthea-version"]',
+                            ).content}</span
+                        >
+                        <a
+                            class="link-secondary"
+                            href="https://github.com/RememberOfLife/amalthea"
+                            >open-source</a
+                        >
+                    </div>
                 </div>
             </div>
         </footer>
@@ -991,12 +1085,136 @@ function RenameModal(props) {
         </form><//
     >`;
 }
+function linkStatus(link) {
+    if (link.revoked_at) return `Revoked ${date(link.revoked_at)}`;
+    if (link.expires_at && link.expires_at * 1000 <= Date.now())
+        return `Expired ${date(link.expires_at)}`;
+    return `Expires: ${date(link.expires_at)}`;
+}
+function LinkActions(props) {
+    const [busy, setBusy] = createSignal(false);
+    const [copied, setCopied] = createSignal(false);
+    const [confirmDelete, setConfirmDelete] = createSignal(false);
+    const perform = (action) => {
+        setBusy(true);
+        return run(action).finally(() => setBusy(false));
+    };
+    return html`<div>
+        <div
+            class="btn-group btn-group-sm"
+            role="group"
+            aria-label="Sharing link actions"
+        >
+            <button
+                class="btn btn-sm btn-outline-primary"
+                disabled=${() => busy() || !props.link.url}
+                title=${() =>
+                    props.link.url
+                        ? "Copy sharing link"
+                        : "Open the original link once to recover its URL"}
+                onClick=${() =>
+                    perform(async () => {
+                        await navigator.clipboard.writeText(props.link.url);
+                        setCopied(true);
+                    })}
+            >
+                ${() => (copied() ? "Copied" : "Copy link")}
+            </button>
+            <button
+                class="btn btn-sm btn-outline-warning"
+                disabled=${() => busy() || Boolean(props.link.revoked_at)}
+                onClick=${() =>
+                    perform(async () => {
+                        await api(`/links/${props.link.id}/revoke`, {
+                            method: "POST",
+                        });
+                        await props.refresh();
+                    })}
+            >
+                ${() => (props.link.revoked_at ? "Revoked" : "Revoke")}
+            </button>
+            <button
+                class="btn btn-sm btn-outline-danger"
+                disabled=${busy}
+                onClick=${() => setConfirmDelete(true)}
+            >
+                Delete
+            </button>
+        </div>
+        <${Show} when=${() => !props.link.url}>
+            <p class="small text-body-secondary mt-2 mb-0">
+                Open the original link once to make it copyable.
+            </p>
+        <//>
+        <${Show} when=${confirmDelete}>
+            <${Modal}
+                title="Delete sharing link?"
+                close=${(_) => setConfirmDelete(false)}
+            >
+                <p>
+                    This permanently deletes the link and its access log. The
+                    file is kept.
+                </p>
+                <div class="d-flex justify-content-end gap-2">
+                    <button
+                        class="btn btn-secondary"
+                        disabled=${busy}
+                        onClick=${() => setConfirmDelete(false)}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        class="btn btn-danger"
+                        disabled=${busy}
+                        onClick=${() =>
+                            perform(async () => {
+                                await api(`/links/${props.link.id}`, {
+                                    method: "DELETE",
+                                });
+                                setConfirmDelete(false);
+                                await props.deleted();
+                            })}
+                    >
+                        Delete link and log
+                    </button>
+                </div>
+            <//>
+        <//>
+    </div>`;
+}
+function AccessLog(props) {
+    const [busy, setBusy] = createSignal(false);
+    return html`<section class="border-top mt-3 pt-3">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+            <h2 class="h5 mb-0">Access log</h2>
+            <button
+                class="btn btn-sm btn-outline-secondary"
+                disabled=${busy}
+                onClick=${() => {
+                    setBusy(true);
+                    return run(props.refresh).finally(() => setBusy(false));
+                }}
+            >
+                Refresh log
+            </button>
+        </div>
+        <p class="small text-body-secondary mt-0 mb-2">
+            Latest 200 non-owning link visits. Only you can see this log.
+        </p>
+        <ul class="list-unstyled small log mb-0">
+            <${For}
+                each=${() => props.rows}
+                fallback=${html`<li>No access recorded.</li>`}
+            >
+                ${(entry) => html`<li>${date(entry.at)} · Link opened</li>`}
+            <//>
+        </ul>
+    </section>`;
+}
 function ShareModal(props) {
     const [links, setLinks] = createSignal([]);
     const [created, setCreated] = createSignal("");
-    const [log, setLog] = createSignal();
     const [busy, setBusy] = createSignal(false);
-    const [copied, setCopied] = createSignal(false);
     const refresh = async () =>
         setLinks(await api(`/files/${props.file.id}/links`));
     onMount(() => run(refresh));
@@ -1004,7 +1222,9 @@ function ShareModal(props) {
         title=${`Share ${props.file.name}`}
         close=${props.close}
     >
-        <p>Full secret link shown only once; copy before closing.</p>
+        <p class="text-secondary">
+            Revoke to stop sharing; delete to remove a link and its access log.
+        </p>
         <form
             class="row g-2 mb-3"
             onSubmit=${(e) => {
@@ -1023,24 +1243,24 @@ function ShareModal(props) {
                         }),
                     );
                     setCreated(result.url);
-                    setCopied(false);
                     await refresh();
                 }).finally(() => setBusy(false));
             }}
         >
             <div class="col-sm-6">
-                <label for="link-label" class="form-label"
+                <label for="link-label" class="form-label mb-0"
                     >Label (optional)</label
                 ><input
                     id="link-label"
                     class="form-control"
                     name="label"
                     maxlength="200"
-                    placeholder="For Alex"
+                    placeholder="..."
                 />
             </div>
             <div class="col-sm-6">
-                <label for="link-expiry" class="form-label">Expires after</label
+                <label for="link-expiry" class="form-label mb-0"
+                    >Expires after</label
                 ><select id="link-expiry" class="form-select" name="days">
                     <option value="7">7 days</option>
                     <option value="1">1 day</option>
@@ -1054,103 +1274,49 @@ function ShareModal(props) {
                 </button>
             </div>
         </form>
-        <${Show} when=${created}
-            ><div class="mb-3">
-                <label class="form-label" for="created-link"
-                    >New sharing link</label
-                >
-                <div class="input-group">
-                    <input
-                        id="created-link"
-                        class="form-control"
-                        readonly
-                        value=${created}
-                        onFocus=${(e) => e.currentTarget.select()}
-                    /><button
-                        class="btn btn-outline-primary"
-                        onClick=${() =>
-                            run(async () => {
-                                await navigator.clipboard.writeText(created());
-                                setCopied(true);
-                            })}
-                    >
-                        ${() => (copied() ? "Copied" : "Copy")}
-                    </button>
-                </div>
-            </div><//
-        >
-        <${For}
-            each=${links}
-            fallback=${html`<p class="text-body-secondary">
-                No sharing links. This file is private.
-            </p>`}
-            >${(link) =>
-                html`<article class="border-top py-3">
-                    <strong>${link.label || "Unlabelled link"}</strong>
-                    <p class="small mb-2">
-                        ${link.revoked_at
-                            ? `Revoked ${date(link.revoked_at)}`
-                            : link.expires_at &&
-                                link.expires_at * 1000 <= Date.now()
-                              ? `Expired ${date(link.expires_at)}`
-                              : `Expires: ${date(link.expires_at)}`}
-                    </p>
-                    <div class="d-flex gap-2">
-                        <button
-                            class="btn btn-sm btn-outline-secondary"
-                            onClick=${() =>
-                                run(async () =>
-                                    setLog({
-                                        label: link.label,
-                                        rows: await api(
-                                            `/links/${link.id}/logs`,
-                                        ),
-                                    }),
-                                )}
-                        >
-                            Access log
-                        </button>
-                        ${!link.revoked_at &&
-                        html`<button
-                            class="btn btn-sm btn-outline-danger"
-                            onClick=${() =>
-                                run(async () => {
-                                    await api(`/links/${link.id}`, {
-                                        method: "DELETE",
-                                    });
-                                    await refresh();
-                                })}
-                        >
-                            Revoke
-                        </button>`}
-                    </div>
-                </article>`}<//
-        >
-        <${Show} when=${log}
-            ><section class="border-top pt-3">
-                <h3 class="h6">
-                    Access log · ${() => log()?.label || "Unlabelled link"}
-                </h3>
-                <p class="small">
-                    Latest 200 requests. Download entries mean bytes were
-                    requested, not proof of a saved file. Resuming adds range
-                    requests.
-                </p>
-                <ul class="list-unstyled small log">
+        <${Show} when=${created}>
+            <p class="small" role="status">
+                Link created. Copy it or open its download page below.
+            </p>
+        <//>
+        <div class="table-responsive">
+            <table class="table align-middle">
+                <thead>
+                    <tr>
+                        <th scope="col">Link</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
                     <${For}
-                        each=${() => log()?.rows}
-                        fallback=${html`<li>No access recorded.</li>`}
-                        >${(entry) =>
-                            html`<li>
-                                ${date(entry.at)} ·
-                                ${entry.event}${entry.range_start != null
-                                    ? ` · bytes ${entry.range_start}–${entry.range_end ?? 0}`
-                                    : ""}
-                            </li>`}<//
+                        each=${links}
+                        fallback=${html`<tr>
+                            <td colspan="3">
+                                No sharing links. This file is private.
+                            </td>
+                        </tr>`}
                     >
-                </ul>
-            </section><//
-        >
+                        ${(link) =>
+                            html`<tr>
+                                <td>
+                                    <a href=${link.url || link.manage_url}
+                                        >${link.label || "Unlabelled link"}</a
+                                    >
+                                </td>
+                                <td class="small">${linkStatus(link)}</td>
+                                <td>
+                                    <${LinkActions}
+                                        link=${link}
+                                        refresh=${(_) => refresh()}
+                                        deleted=${(_) => refresh()}
+                                    />
+                                </td>
+                            </tr>`}
+                    <//>
+                </tbody>
+            </table>
+        </div>
     <//>`;
 }
 function TransferRow(props) {

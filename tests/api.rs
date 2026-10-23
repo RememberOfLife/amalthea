@@ -190,7 +190,7 @@ async fn registration_username_availability() {
     h.seed("Taken", 100).await;
     std::fs::create_dir(h.app.settings.data_dir.join("users/orphan")).unwrap();
     let token = model::secret();
-    sqlx::query("INSERT INTO invitations VALUES (?,?,?)")
+    sqlx::query("INSERT INTO invitations (token_hash, quota_bytes, expires_at) VALUES (?,?,?)")
         .bind(model::hash(&token))
         .bind(100)
         .bind(model::now() + 1000)
@@ -238,7 +238,7 @@ async fn registration_username_availability() {
 async fn invitation_registration_login_and_logout() {
     let h = Harness::with_prefix("/files").await;
     let invite = model::secret();
-    sqlx::query("INSERT INTO invitations VALUES (?,?,?)")
+    sqlx::query("INSERT INTO invitations (token_hash, quota_bytes, expires_at) VALUES (?,?,?)")
         .bind(model::hash(&invite))
         .bind(12345)
         .bind(model::now() + 60)
@@ -540,7 +540,7 @@ async fn checksum_offset_and_size_are_enforced() {
         files[0]["processing_error"]
             .as_str()
             .unwrap()
-            .contains("checksum")
+            .contains("hash does not match")
     );
     let (status, _) = h
         .json(
@@ -625,80 +625,160 @@ async fn upload_survives_reopen_and_uncommitted_disk_tail() {
 }
 
 #[tokio::test]
-async fn independent_links_expire_revoke_and_log_without_exposing_owner() {
-    let h = Harness::new().await;
+async fn retrievable_links_revoke_delete_and_keep_owner_only_logs() {
+    let h = Harness::with_prefix("/share").await;
     let cookie = h.seed("Alice", 100).await;
     let other = h.seed("Bob", 100).await;
     let id = h.file(&cookie, "a.txt", b"hello world").await;
     let (link, token) = h.link(&cookie, &id).await;
     let (second, token2) = h.link(&cookie, &id).await;
+    let public = format!("/api/live/public/{token}");
+    let private = format!("/api/live/links/{link}");
+    let expected_url = format!("https://example.test/share/s/{token}/a.txt");
     assert_eq!(token.len(), 86);
-    let (status, meta) = h
-        .json("GET", &format!("/api/live/public/{token}"), "", Value::Null)
-        .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(meta.get("user_id").is_none() && meta.get("username").is_none());
-    let (status, headers, body) = h
-        .request(
-            "GET",
-            &format!("/api/live/public/{token}/content"),
-            "",
-            vec![],
-            &[("range", "bytes=1-4")],
-        )
-        .await;
-    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
-    assert_eq!(headers["content-range"], "bytes 1-4/11");
-    assert_eq!(body, b"ello");
-    let (_, logs) = h
+    let (status, links) = h
         .json(
             "GET",
-            &format!("/api/live/links/{link}/logs"),
+            &format!("/api/live/files/{id}/links"),
             &cookie,
             Value::Null,
         )
         .await;
-    assert_eq!(logs.as_array().unwrap().len(), 2);
-    assert_eq!(logs[0]["event"], "download");
-    assert_eq!(logs[1]["event"], "view");
+    assert_eq!(status, StatusCode::OK);
+    let saved = links
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == link)
+        .unwrap();
+    assert_eq!(saved["url"], expected_url);
     assert_eq!(
-        h.json(
-            "DELETE",
-            &format!("/api/live/links/{link}"),
-            &other,
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
+        saved["manage_url"],
+        format!("https://example.test/share/links/{link}")
     );
-    assert_eq!(
-        h.json(
-            "GET",
-            &format!("/api/live/links/{link}/logs"),
-            &other,
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        h.json(
-            "DELETE",
-            &format!("/api/live/links/{link}"),
-            &cookie,
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::NO_CONTENT
-    );
-    assert_eq!(
-        h.json("GET", &format!("/api/live/public/{token}"), "", Value::Null)
+    assert!(saved.get("token").is_none());
+    // Both page URLs work under a configured prefix.
+    for path in [
+        format!("/s/{token}/a.txt"),
+        format!("/s/{token}"),
+        format!("/links/{link}"),
+    ] {
+        assert_eq!(
+            h.request("GET", &path, &cookie, vec![], &[]).await.0,
+            StatusCode::OK
+        );
+    }
+    for session in ["", &other] {
+        let (status, meta) = h.json("GET", &public, session, Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        for field in ["user_id", "username", "link", "access_log"] {
+            assert!(meta.get(field).is_none());
+        }
+    }
+    // Ranges, full downloads and HEAD requests must not generate entries.
+    for range in ["bytes=1-4", "bytes=5-9"] {
+        assert_eq!(
+            h.request(
+                "GET",
+                &format!("{public}/content"),
+                "",
+                vec![],
+                &[("range", range)]
+            )
             .await
             .0,
-        StatusCode::NOT_FOUND
+            StatusCode::PARTIAL_CONTENT
+        );
+    }
+    assert_eq!(
+        h.request("GET", &format!("{public}/content"), "", vec![], &[])
+            .await
+            .2,
+        b"hello world"
+    );
+    assert_eq!(
+        h.request("HEAD", &public, "", vec![], &[]).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        h.request("HEAD", &format!("{public}/content"), "", vec![], &[])
+            .await
+            .0,
+        StatusCode::OK
+    );
+    // Owner visits and log refreshes do not count as accesses.
+    for path in [&public, &private] {
+        let (status, meta) = h.json("GET", path, &cookie, Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(meta["link"]["url"], expected_url);
+        assert_eq!(meta["access_log"].as_array().unwrap().len(), 2);
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM access_logs WHERE link_id = ?")
+        .bind(&link)
+        .fetch_one(&h.app.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+    // Historic chunk entries are retained but excluded from the access log.
+    sqlx::query("INSERT INTO access_logs (link_id, event, at) VALUES (?, 'download', ?)")
+        .bind(&link)
+        .bind(model::now())
+        .execute(&h.app.db)
+        .await
+        .unwrap();
+    let (status, logs) = h
+        .json("GET", &format!("{private}/logs"), &cookie, Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(logs.as_array().unwrap().len(), 2);
+    assert!(
+        logs.as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["event"] == "view" && row.get("range_start").is_none())
+    );
+    for (method, path) in [
+        ("GET", private.clone()),
+        ("GET", format!("{private}/logs")),
+        ("POST", format!("{private}/revoke")),
+        ("DELETE", private.clone()),
+        ("GET", format!("/api/live/files/{id}/links")),
+    ] {
+        assert_eq!(
+            h.json(method, &path, &other, Value::Null).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            h.json(method, &path, "", Value::Null).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    for _ in 0..2 {
+        assert_eq!(
+            h.json("POST", &format!("{private}/revoke"), &cookie, Value::Null)
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+    }
+    for session in ["", &other] {
+        for path in [&public, &format!("{public}/content")] {
+            assert_eq!(
+                h.json("GET", path, session, Value::Null).await.0,
+                StatusCode::NOT_FOUND
+            );
+        }
+    }
+    let (status, meta) = h.json("GET", &public, &cookie, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(meta["link"]["revoked_at"].is_number());
+    assert_eq!(meta["link"]["url"], expected_url);
+    assert_eq!(meta["access_log"], logs);
+    assert_eq!(
+        h.request("GET", &format!("{public}/content"), &cookie, vec![], &[])
+            .await
+            .2,
+        b"hello world"
     );
     assert_eq!(
         h.json(
@@ -711,9 +791,10 @@ async fn independent_links_expire_revoke_and_log_without_exposing_owner() {
         .0,
         StatusCode::OK
     );
+    // Expiry, like revocation, preserves owner access.
     sqlx::query("UPDATE links SET expires_at = ? WHERE id = ?")
         .bind(model::now() - 1)
-        .bind(second)
+        .bind(&second)
         .execute(&h.app.db)
         .await
         .unwrap();
@@ -727,6 +808,141 @@ async fn independent_links_expire_revoke_and_log_without_exposing_owner() {
         .await
         .0,
         StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        h.json(
+            "GET",
+            &format!("/api/live/public/{token2}"),
+            &cookie,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        h.json("DELETE", &private, &cookie, Value::Null).await.0,
+        StatusCode::NO_CONTENT
+    );
+    for path in [
+        &private,
+        &public,
+        &format!("{public}/content"),
+        &format!("{private}/logs"),
+    ] {
+        assert_eq!(
+            h.json("GET", path, &cookie, Value::Null).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM access_logs WHERE link_id = ?")
+        .bind(&link)
+        .fetch_one(&h.app.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        h.json(
+            "GET",
+            &format!("/api/live/files/{id}"),
+            &cookie,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    // Active links can also be deleted directly.
+    let (third, token3) = h.link(&cookie, &id).await;
+    assert_eq!(
+        h.json(
+            "DELETE",
+            &format!("/api/live/links/{third}"),
+            &cookie,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        h.json(
+            "GET",
+            &format!("/api/live/public/{token3}"),
+            "",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn legacy_share_links_recover_their_url_and_survive_renaming() {
+    let h = Harness::new().await;
+    let cookie = h.seed("Alice", 100).await;
+    let id = h.file(&cookie, "before.txt", b"hello").await;
+    let (link, token) = h.link(&cookie, &id).await;
+    sqlx::query("UPDATE links SET token = NULL WHERE id = ?")
+        .bind(&link)
+        .execute(&h.app.db)
+        .await
+        .unwrap();
+    let (status, meta) = h
+        .json(
+            "GET",
+            &format!("/api/live/links/{link}"),
+            &cookie,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(meta["link"]["url"].is_null());
+    assert!(meta["link"]["manage_url"].is_string());
+    assert_eq!(
+        h.json("GET", &format!("/api/live/public/{token}"), "", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        h.json(
+            "PATCH",
+            &format!("/api/live/files/{id}"),
+            &cookie,
+            json!({"name": "after.txt"})
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let (_, meta) = h
+        .json(
+            "GET",
+            &format!("/api/live/links/{link}"),
+            &cookie,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(
+        meta["link"]["url"],
+        format!("https://example.test/s/{token}/after.txt")
+    );
+    let (_, links) = h
+        .json(
+            "GET",
+            &format!("/api/live/files/{id}/links"),
+            &cookie,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(links[0]["url"], meta["link"]["url"]);
+    assert_eq!(
+        h.json("GET", &format!("/api/live/public/{token}"), "", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
     );
 }
 
@@ -1372,9 +1588,15 @@ async fn processing_queue_is_durable_fair_and_restricts_operations() {
     h.json("GET", "/api/live/files", &b, Value::Null).await;
     let id = files[0]["id"].as_str().unwrap();
     let path = format!("/api/live/files/{id}");
+    // Existing links remain manageable while their file is processing.
+    assert_eq!(
+        h.json("GET", &format!("{path}/links"), &a, Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
     for (method, suffix, body) in [
         ("GET", "/content", Value::Null),
-        ("GET", "/links", Value::Null),
         ("POST", "/links", json!({})),
         ("PATCH", "", json!({"name":"renamed"})),
     ] {

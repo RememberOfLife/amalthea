@@ -32,7 +32,8 @@ pub fn router(app: State) -> Router {
         .route("/files/{id}/content", get(download))
         .route("/files/{id}/retry", post(retry_processing))
         .route("/files/{id}/links", get(links).post(create_link))
-        .route("/links/{id}", axum::routing::delete(revoke_link))
+        .route("/links/{id}", get(link_meta).delete(delete_link))
+        .route("/links/{id}/revoke", post(revoke_link))
         .route("/links/{id}/logs", get(logs))
         .route("/uploads", get(transfers::list).post(transfers::start))
         .route("/uploads/check-name", post(transfers::check_name))
@@ -146,7 +147,8 @@ async fn page(
         || matches!(path, "/imprint" | "/imprint/")
         || path == "/login"
         || path == "/register"
-        || (parts.len() == 3 && parts[0] == "s");
+        || (matches!(parts.len(), 2 | 3) && parts[0] == "s")
+        || (parts.len() == 2 && parts[0] == "links");
     if !valid {
         if parts.len() != 1 {
             return Err(Error::missing());
@@ -178,6 +180,7 @@ async fn page(
     }
     let html = tokio::fs::read_to_string(app.settings.static_dir.join("index.html")).await?;
     let html = html.replace("__AMALTHEA_BASE__", app.settings.prefix());
+    let html = html.replace("__AMALTHEA_VERSION__", env!("CARGO_PKG_VERSION"));
     let html = html.replace(
         "__AMALTHEA_IMPRINT_AVAILABLE__",
         if imprint.is_some() { "true" } else { "false" },
@@ -240,7 +243,7 @@ async fn download(
 ) -> Result<Response> {
     let user = auth::user(&app, &headers).await?;
     let record = storage::owned_file(&app, &user, &id).await?;
-    transfers::content(&app, &user, record, headers, method, None).await
+    transfers::content(&app, &user, record, headers, method).await
 }
 #[derive(Deserialize)]
 struct Rename {
@@ -354,7 +357,7 @@ async fn create_link(
     file.require_complete()?;
     let secret = model::secret();
     let link_id = model::id();
-    sqlx::query("INSERT INTO links (id, file_id, token_hash, label, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(&link_id).bind(&id).bind(model::hash(&secret)).bind(input.label).bind(input.expires_at).bind(model::now()).execute(&app.db).await?;
+    sqlx::query("INSERT INTO links (id, file_id, token_hash, token, label, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(&link_id).bind(&id).bind(model::hash(&secret)).bind(&secret).bind(input.label).bind(input.expires_at).bind(model::now()).execute(&app.db).await?;
     Ok(Json(
         json!({"id": link_id, "url": format!("{}/s/{}/{}", app.settings.webroot, secret, file.name)}),
     ))
@@ -365,11 +368,18 @@ async fn links(
     headers: HeaderMap,
 ) -> Result<Json<Value>> {
     let user = auth::user(&app, &headers).await?;
-    storage::owned_file(&app, &user, &id)
-        .await?
-        .require_ready()?;
-    let rows = sqlx::query_as::<_, LinkRecord>("SELECT id, label, expires_at, revoked_at, created_at FROM links WHERE file_id = ? ORDER BY created_at DESC").bind(id).fetch_all(&app.db).await?;
-    Ok(Json(json!(rows)))
+    let file = storage::owned_file(&app, &user, &id).await?;
+    let rows = sqlx::query_as::<_, LinkRecord>(
+        "SELECT * FROM links WHERE file_id = ? ORDER BY created_at DESC, id DESC",
+    )
+    .bind(id)
+    .fetch_all(&app.db)
+    .await?;
+    Ok(Json(json!(
+        rows.iter()
+            .map(|link| link.owner_view(&app.settings.webroot, &file.name))
+            .collect::<Vec<_>>()
+    )))
 }
 async fn check_link_owner(app: &State, user: &User, id: &str) -> Result<()> {
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM links l JOIN files f ON l.file_id = f.id WHERE l.id = ? AND f.user_id = ?)").bind(id).bind(user.id).fetch_one(&app.db).await?;
@@ -399,34 +409,107 @@ async fn logs(
 ) -> Result<Json<Value>> {
     let user = auth::user(&app, &headers).await?;
     check_link_owner(&app, &user, &id).await?;
-    let rows: Vec<(String, i64, Option<i64>, Option<i64>)> = sqlx::query_as("SELECT event, at, range_start, range_end FROM access_logs WHERE link_id = ? ORDER BY id DESC LIMIT 200").bind(id).fetch_all(&app.db).await?;
-    Ok(Json(json!(rows.into_iter().map(|(event, at, range_start, range_end)| json!({"event": event, "at": at, "range_start": range_start, "range_end": range_end})).collect::<Vec<_>>())))
+    Ok(Json(link_logs(&app, &id).await?))
 }
-async fn public_file(app: &State, token: &str) -> Result<(User, FileRecord, String)> {
-    let row: Option<(String, String)> = sqlx::query_as("SELECT id, file_id FROM links WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)").bind(model::hash(token)).bind(model::now()).fetch_optional(&app.db).await?;
-    let (link_id, file_id) = row.ok_or_else(Error::missing)?;
-    let file: FileRecord = sqlx::query_as("SELECT * FROM files WHERE id = ?")
-        .bind(file_id)
+async fn delete_link(
+    AxumState(app): AxumState<State>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode> {
+    let user = auth::user(&app, &headers).await?;
+    check_link_owner(&app, &user, &id).await?;
+    sqlx::query("DELETE FROM links WHERE id = ?")
+        .bind(id)
+        .execute(&app.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+async fn link_logs(app: &State, id: &str) -> Result<Value> {
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT at FROM access_logs WHERE link_id = ? AND event = 'view' ORDER BY id DESC LIMIT 200")
+        .bind(id).fetch_all(&app.db).await?;
+    Ok(json!(
+        rows.into_iter()
+            .map(|(at,)| json!({"event": "view", "at": at}))
+            .collect::<Vec<_>>()
+    ))
+}
+async fn owner_link_meta(app: &State, file: &FileRecord, link: &LinkRecord) -> Result<Value> {
+    Ok(json!({
+        "id": file.id, "name": file.name, "size": file.size, "sha256": file.sha256,
+        "can_download": file.status == "ready" && model::valid_name(&file.name),
+        "link": link.owner_view(&app.settings.webroot, &file.name),
+        "access_log": link_logs(app, &link.id).await?,
+    }))
+}
+async fn link_meta(
+    AxumState(app): AxumState<State>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>> {
+    let user = auth::user(&app, &headers).await?;
+    check_link_owner(&app, &user, &id).await?;
+    let link: LinkRecord = sqlx::query_as("SELECT * FROM links WHERE id = ?")
+        .bind(id)
         .fetch_optional(&app.db)
         .await?
         .ok_or_else(Error::missing)?;
+    let file = storage::owned_file(&app, &user, &link.file_id).await?;
+    Ok(Json(owner_link_meta(&app, &file, &link).await?))
+}
+async fn public_file(
+    app: &State,
+    token: &str,
+    headers: &HeaderMap,
+) -> Result<(User, FileRecord, LinkRecord, bool)> {
+    let mut link: LinkRecord = sqlx::query_as("SELECT * FROM links WHERE token_hash = ?")
+        .bind(model::hash(token))
+        .fetch_optional(&app.db)
+        .await?
+        .ok_or_else(Error::missing)?;
+    let file: FileRecord = sqlx::query_as("SELECT * FROM files WHERE id = ?")
+        .bind(&link.file_id)
+        .fetch_optional(&app.db)
+        .await?
+        .ok_or_else(Error::missing)?;
+    let is_owner = match auth::user(app, headers).await {
+        Ok(user) => user.id == file.user_id,
+        Err(error) if error.0 == StatusCode::UNAUTHORIZED => false,
+        Err(error) => return Err(error),
+    };
+    if !is_owner && !link.active() {
+        return Err(Error::missing());
+    }
     let user = sqlx::query_as("SELECT id, username, quota_bytes FROM users WHERE id = ?")
         .bind(file.user_id)
         .fetch_one(&app.db)
         .await?;
     let file = storage::owned_file(app, &user, &file.id).await?;
-    file.require_complete()?;
-    Ok((user, file, link_id))
+    if !is_owner {
+        file.require_complete()?;
+    }
+    if link.token.is_none() {
+        sqlx::query("UPDATE links SET token = ? WHERE id = ? AND token IS NULL")
+            .bind(token)
+            .bind(&link.id)
+            .execute(&app.db)
+            .await?;
+        link.token = Some(token.to_owned());
+    }
+    Ok((user, file, link, is_owner))
 }
 async fn public_meta(
     AxumState(app): AxumState<State>,
     Path(token): Path<String>,
     method: Method,
+    headers: HeaderMap,
 ) -> Result<Json<Value>> {
-    let (_, file, link) = public_file(&app, &token).await?;
+    let (_, file, link, is_owner) = public_file(&app, &token, &headers).await?;
+    if is_owner {
+        return Ok(Json(owner_link_meta(&app, &file, &link).await?));
+    }
     if method != Method::HEAD {
         sqlx::query("INSERT INTO access_logs (link_id, event, at) VALUES (?, 'view', ?)")
-            .bind(link)
+            .bind(link.id)
             .bind(model::now())
             .execute(&app.db)
             .await?;
@@ -441,8 +524,8 @@ async fn public_download(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response> {
-    let (user, file, link) = public_file(&app, &token).await?;
-    transfers::content(&app, &user, file, headers, method, Some(link)).await
+    let (user, file, _, _) = public_file(&app, &token, &headers).await?;
+    transfers::content(&app, &user, file, headers, method).await
 }
 
 async fn retry_processing(

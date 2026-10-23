@@ -32,6 +32,8 @@ enum Command {
 enum InviteCommand {
     /// List unused invitations (including expired ones pending cleanup).
     List,
+    /// Retrieve an unused invitation's registration URL using its full ID.
+    Url { id: String },
     /// Revoke an invitation using its full ID from `invite list`.
     Revoke { id: String },
 }
@@ -68,6 +70,16 @@ async fn main() -> anyhow::Result<()> {
     let app = App::open(settings.clone()).await?;
     match cli.command {
         Command::Invite { command } => match command {
+            InviteCommand::Url { id } => {
+                let token: Option<Option<String>> =
+                    sqlx::query_scalar("SELECT token FROM invitations WHERE token_hash = ?")
+                        .bind(id)
+                        .fetch_optional(&app.db)
+                        .await?;
+                let token = token.context("unknown invitation (it may have been used or removed)")?
+                    .context("This invitation predates saved links; use the original URL or create a new invitation")?;
+                println!("{}/register#{}", settings.webroot, token);
+            }
             InviteCommand::List => {
                 let invitations: Vec<(String, i64, String, i64)> = sqlx::query_as(
                     "SELECT token_hash, quota_bytes, datetime(expires_at, 'unixepoch'), expires_at FROM invitations ORDER BY expires_at, token_hash",
@@ -174,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
                     bail!("expires-hours must be between 1 and 87600");
                 }
                 let token = model::secret();
-                sqlx::query("INSERT INTO invitations (token_hash, quota_bytes, expires_at) VALUES (?, ?, ?)").bind(model::hash(&token)).bind(quota).bind(model::now() + expires_hours * 3600).execute(&app.db).await?;
+                sqlx::query("INSERT INTO invitations (token_hash, token, quota_bytes, expires_at) VALUES (?, ?, ?, ?)").bind(model::hash(&token)).bind(&token).bind(quota).bind(model::now() + expires_hours * 3600).execute(&app.db).await?;
                 println!("{}/register#{}", settings.webroot, token);
             }
             UserCommand::Quota { username, bytes } => {

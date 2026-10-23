@@ -133,8 +133,32 @@ pub struct Upload {
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct LinkRecord {
     pub id: String,
+    pub file_id: String,
+    #[serde(skip_serializing)]
+    pub token: Option<String>,
     pub label: String,
     pub expires_at: Option<i64>,
     pub revoked_at: Option<i64>,
     pub created_at: i64,
+}
+impl LinkRecord {
+    pub fn public_url(&self, webroot: &str, name: &str) -> Option<String> {
+        self.token.as_ref().map(|token| {
+            let mut url = url::Url::parse(webroot).expect("validated webroot");
+            url.path_segments_mut()
+                .expect("HTTP URL")
+                .pop_if_empty()
+                .extend(["s", token, name]);
+            url.to_string()
+        })
+    }
+    pub fn owner_view(&self, webroot: &str, name: &str) -> serde_json::Value {
+        let mut value = serde_json::to_value(self).expect("link record");
+        value["url"] = serde_json::json!(self.public_url(webroot, name));
+        value["manage_url"] = serde_json::json!(format!("{webroot}/links/{}", self.id));
+        value
+    }
+    pub fn active(&self) -> bool {
+        self.revoked_at.is_none() && self.expires_at.is_none_or(|at| at > now())
+    }
 }

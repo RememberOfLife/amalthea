@@ -50,12 +50,13 @@ async fn list_and_revoke_registration_invitations() {
     let url = success(cli(&config, &["user", "create", "--quota", "2G"]));
     let token = url.trim().split_once('#').unwrap().1;
     let id = model::hash(token);
+    assert_eq!(success(cli(&config, &["invite", "url", &id])), url);
     let other_url = success(cli(&config, &["user", "create"]));
     let other_token = other_url.trim().split_once('#').unwrap().1;
     let other_id = model::hash(other_token);
     let app = App::open(Settings::load(&config).unwrap()).await.unwrap();
     let expired_id = model::hash("expired invitation");
-    sqlx::query("INSERT INTO invitations VALUES (?, 0, ?)")
+    sqlx::query("INSERT INTO invitations (token_hash, quota_bytes, expires_at) VALUES (?, 0, ?)")
         .bind(&expired_id)
         .bind(model::now() - 60)
         .execute(&app.db)
@@ -72,6 +73,9 @@ async fn list_and_revoke_registration_invitations() {
             .any(|line| line.starts_with(&expired_id) && line.ends_with("\texpired"))
     );
     assert!(!listing.contains(token));
+    let legacy = cli(&config, &["invite", "url", &expired_id]);
+    assert!(!legacy.status.success());
+    assert!(String::from_utf8_lossy(&legacy.stderr).contains("predates saved links"));
 
     success(cli(&config, &["invite", "revoke", &id]));
     let listing = success(cli(&config, &["invite", "list"]));
@@ -80,6 +84,7 @@ async fn list_and_revoke_registration_invitations() {
     let missing = cli(&config, &["invite", "revoke", &id]);
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("unknown invitation"));
+    assert!(!cli(&config, &["invite", "url", &id]).status.success());
 
     let router = routes::router(app);
     for (token, expected) in [
@@ -97,5 +102,6 @@ async fn list_and_revoke_registration_invitations() {
         assert_eq!(response.status(), expected);
     }
     success(cli(&config, &["invite", "revoke", &expired_id]));
+    assert!(!cli(&config, &["invite", "url", &other_id]).status.success());
     assert_eq!(success(cli(&config, &["invite", "list"])), empty);
 }
