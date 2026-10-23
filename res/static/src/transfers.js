@@ -18,6 +18,13 @@ const createWorker = () =>
 
 export const [jobs, setJobs] = createSignal([]);
 const running = new Map();
+function track(key, kind, controller) {
+    let finish;
+    const done = new Promise((resolve) => (finish = resolve));
+    const task = { kind, controller, done, finish };
+    running.set(key, task);
+    return task;
+}
 let uploadRate = 0;
 let downloadRate = 0;
 let onUploaded = () => {};
@@ -199,7 +206,7 @@ export async function upload(file, name, scope, existing) {
             offset: 0,
         });
     const controller = new AbortController();
-    running.set(key, { controller, kind: "upload" });
+    const task = track(key, "upload", controller);
     patch(key, {
         status: "Calculating file hash",
         phase: "client",
@@ -329,6 +336,7 @@ export async function upload(file, name, scope, existing) {
     } finally {
         running.delete(key);
         patch(key, { active: false, pausing: false });
+        task.finish();
         // A request may have committed even when its response was lost or aborted.
         void onQuotaChanged();
     }
@@ -360,9 +368,16 @@ export async function restoreUploads(scope) {
     });
 }
 export async function discard(job) {
-    if (running.has(job.key) || job.removing) return;
+    if (job.removing) return;
     patch(job.key, { removing: true });
     try {
+        const task = running.get(job.key);
+        if (task) {
+            pause(job.key);
+            await task.done;
+            job = jobs().find((row) => row.key === job.key);
+            if (!job) return;
+        }
         if (job.kind === "upload" && job.uploadId && !job.complete) {
             try {
                 await api(`/uploads/${job.uploadId}`, { method: "DELETE" });
@@ -415,8 +430,7 @@ export async function resumeDownload(job) {
 async function runDownload(job, writeMetadata) {
     if (running.has(job.key)) return;
     const controller = new AbortController();
-    const task = { kind: "download", controller };
-    running.set(job.key, task);
+    const task = track(job.key, "download", controller);
     patch(job.key, {
         status: "Preparing download",
         phase: "preparing",
@@ -513,8 +527,12 @@ async function runDownload(job, writeMetadata) {
     } finally {
         running.delete(job.key);
         patch(job.key, { active: false, pausing: false });
-        notifyStorage();
-        await refreshBrowserStorage();
+        try {
+            notifyStorage();
+            await refreshBrowserStorage();
+        } finally {
+            task.finish();
+        }
     }
 }
 export async function saveDownload(job) {

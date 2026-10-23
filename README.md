@@ -38,10 +38,8 @@ Other useful things:
 Reducing a quota preserves existing files. New uploads and completion of pending
 uploads are blocked when usage plus reservations exceeds the quota.
 
-## Sharing and transfers
+## Sharing and Transfers
 
-- Upload, download, rename, and permanently delete files at `/<username>/`.
-  Deletion requires a confirmation click.
 - Create multiple independent sharing links per file, with optional expiry,
   revocation, and access logs. Copy each link when creating it: only its token
   hash is stored on the server. Renaming keeps links working.
@@ -54,12 +52,6 @@ uploads are blocked when usage plus reservations exceeds the quota.
   there to reclaim space. Saving a copy does not clear this storage. Browser storage
   limits apply; clearing site data or using private browsing can remove it.
   Direct browser downloads are also available.
-- Files are checked with SHA-256 in background workers before downloads or sharing are enabled, and after resumable download.
-  Transfers use bounded memory, including files larger than 16 GiB.
-
-Use a current Firefox or Chrome over HTTPS; localhost HTTP also supports the
-browser APIs. Restart recovery uses server files and browser disk storage, not
-cookies. Login cookies authenticate requests; sign in again if one expires.
 
 You *can* also manually move files in and out of the users directory,
 the service handles this appropriately.  

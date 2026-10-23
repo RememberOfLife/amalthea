@@ -475,11 +475,15 @@ function App() {
                                                     filter().toLowerCase(),
                                                 ),
                                         )}
-                                    fallback=${html`<p
-                                        class="text-body-secondary py-3"
-                                    >
-                                        No matching files.
-                                    </p>`}
+                                    fallback=${html`<span
+                                        class="d-block text-center text-body-secondary fs-4 py-3"
+                                        role="img"
+                                        aria-label="No matching files"
+                                        ><i
+                                            class="bi bi-inbox"
+                                            aria-hidden="true"
+                                        ></i
+                                    ></span>`}
                                 >
                                     ${(file) =>
                                         html`<article
@@ -1157,7 +1161,9 @@ function TransferRow(props) {
         job().removing
             ? "Removing..."
             : job().kind === "download"
-              ? "Remove from browser"
+              ? job().active
+                  ? "Cancel download"
+                  : "Remove from browser"
               : job().complete
                 ? "Dismiss"
                 : "Cancel upload";
@@ -1217,15 +1223,19 @@ function TransferRow(props) {
                 <span class="text-nowrap">/ ${() => bytes(job().size)}</span>
             </span>
         </div>
-        <p class="small mb-2" role="status">
+        <p class="small mb-1" role="status">
             ${() =>
                 job().busyElsewhere && !job().active
                     ? "In use in another tab. Pause it there before resuming or removing it here."
                     : progress().status}
         </p>
-        <div class="d-flex gap-2 flex-wrap align-items-center">
+        <div
+            class="btn-group btn-group-sm w-100 justify-content-end transfer-actions"
+            role="group"
+            aria-label=${() => `${job().name} transfer actions`}
+        >
             <button
-                class="btn btn-sm btn-outline-primary"
+                class="btn btn-sm btn-outline-primary text-start"
                 hidden=${() => !job().active && !canResume()}
                 disabled=${blocked}
                 onClick=${() => {
@@ -1249,7 +1259,7 @@ function TransferRow(props) {
                             : "Resume"}
             </button>
             <label
-                class="btn btn-sm btn-outline-primary mb-0"
+                class="btn btn-sm btn-outline-primary text-start mb-0"
                 hidden=${() =>
                     job().kind !== "upload" ||
                     job().active ||
@@ -1268,7 +1278,7 @@ function TransferRow(props) {
                 />
             </label>
             <button
-                class="btn btn-sm btn-primary"
+                class="btn btn-sm btn-primary text-start"
                 hidden=${() => !job().complete || job().kind !== "download"}
                 disabled=${blocked}
                 onClick=${() => run(() => saveDownload(job()))}
@@ -1276,8 +1286,7 @@ function TransferRow(props) {
                 Save a copy
             </button>
             <button
-                class="btn btn-sm btn-outline-secondary"
-                hidden=${() => job().active}
+                class="btn btn-sm btn-outline-secondary flex-grow-0 flex-shrink-0"
                 disabled=${blocked}
                 title=${discardLabel}
                 aria-label=${discardLabel}
@@ -1384,7 +1393,7 @@ function BrowserStorage() {
                 if (!state.checked) return "Checking browser storage...";
                 if (!downloads().length)
                     return html`<span
-                        class="d-block text-center text-body-secondary fs-2"
+                        class="d-block text-center text-body-secondary fs-4"
                         role="img"
                         aria-label="Browser storage is empty"
                         ><i class="bi bi-inbox" aria-hidden="true"></i

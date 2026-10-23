@@ -116,6 +116,11 @@ body {
     font-size: clamp(0.5rem, 3.3cqi, 0.75rem);
     line-height: 1;
 }
+.btn-group.transfer-actions > .btn:nth-child(1 of .btn:not([hidden])) {
+    margin-left: 0;
+    border-top-left-radius: var(--bs-border-radius-sm);
+    border-bottom-left-radius: var(--bs-border-radius-sm);
+}
 dialog {
     border: 1px solid #dce0e5;
     border-radius: 0.5rem;
