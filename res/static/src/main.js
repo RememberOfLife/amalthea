@@ -685,9 +685,19 @@ function App() {
 
 function AuthForm(props) {
     const [busy, setBusy] = createSignal(false);
+    const validateConfirmation = (form) => {
+        const confirmation = form.elements.namedItem("password-confirmation");
+        if (!confirmation) return;
+        confirmation.setCustomValidity(
+            confirmation.value &&
+                confirmation.value !== form.elements.namedItem("password").value
+                ? "UserSecret entries must match."
+                : "",
+        );
+    };
     return html`<section class="auth mx-auto">
-        <h1 class="h3">
-            ${props.registration ? "Create your account" : "Sign in"}
+        <h1 class="h3 fw-normal text-center mb-4">
+            ${props.registration ? "Registration" : "Authentication"}
         </h1>
         <${Show}
             when=${!props.registration || props.invitation}
@@ -696,8 +706,11 @@ function AuthForm(props) {
             </p>`}
         >
             <form
+                onInput=${(event) => validateConfirmation(event.currentTarget)}
                 onSubmit=${(event) => {
                     event.preventDefault();
+                    validateConfirmation(event.currentTarget);
+                    if (!event.currentTarget.reportValidity()) return;
                     const values = new FormData(event.currentTarget);
                     setBusy(true);
                     run(async () => {
@@ -715,7 +728,9 @@ function AuthForm(props) {
                     }).finally(() => setBusy(false));
                 }}
             >
-                <label class="form-label mt-3" for="username">Username</label
+                <label class="form-label mb-1" for="username"
+                    ><span class="text-body-secondary">User</span
+                    ><b>Id</b></label
                 ><input
                     class="form-control"
                     id="username"
@@ -725,7 +740,9 @@ function AuthForm(props) {
                     maxlength="64"
                     required
                 />
-                <label class="form-label mt-3" for="password">Password</label
+                <label class="form-label mt-3 mb-1" for="password"
+                    ><span class="text-body-secondary">User</span
+                    ><b>Secret</b></label
                 ><input
                     class="form-control"
                     id="password"
@@ -739,16 +756,38 @@ function AuthForm(props) {
                     required
                 />
                 ${props.registration &&
-                html`<p class="small text-body-secondary mt-2">
-                    Use at least 12 characters. No email address is required.
-                </p>`}
-                <button class="btn btn-primary mt-3" disabled=${busy}>
+                html`<p
+                        id="password-help"
+                        class="small text-body-secondary mt-2 mb-0"
+                    >
+                        Min. 12 characters.
+                    </p>
+                    <label
+                        class="form-label mt-3 mb-1"
+                        for="password-confirmation"
+                        ><span class="text-body-secondary">Confirm User</span
+                        ><b>Secret</b></label
+                    ><input
+                        class="form-control"
+                        id="password-confirmation"
+                        name="password-confirmation"
+                        type="password"
+                        autocomplete="new-password"
+                        minlength="12"
+                        maxlength="1024"
+                        required
+                    />`}
+                <button
+                    class="btn btn-primary w-100 py-2 mt-3"
+                    type="submit"
+                    disabled=${busy}
+                >
                     ${() =>
                         busy()
                             ? "Please wait..."
                             : props.registration
-                              ? "Create account"
-                              : "Sign in"}
+                              ? "Register"
+                              : "Authenticate"}
                 </button>
             </form>
         <//>

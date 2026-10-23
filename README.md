@@ -27,6 +27,8 @@ Invitations are single-use. There are no administrator accounts or email address
 
 Other useful things:
 ```sh
+./target/release/amalthea invite list
+./target/release/amalthea invite revoke <ID> # invite list ID
 ./target/release/amalthea user list
 ./target/release/amalthea user quota zeus # show quota
 ./target/release/amalthea user quota zeus 2G # set quota

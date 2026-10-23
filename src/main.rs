@@ -17,11 +17,23 @@ struct Cli {
 enum Command {
     /// Run the HTTP service (applies pending migrations before listening).
     Server,
+    /// List or revoke single-use registration invitations.
+    Invite {
+        #[command(subcommand)]
+        command: InviteCommand,
+    },
     /// Manage accounts and single-use registration invitations.
     User {
         #[command(subcommand)]
         command: UserCommand,
     },
+}
+#[derive(Subcommand)]
+enum InviteCommand {
+    /// List unused invitations (including expired ones pending cleanup).
+    List,
+    /// Revoke an invitation using its full ID from `invite list`.
+    Revoke { id: String },
 }
 #[derive(Subcommand)]
 enum UserCommand {
@@ -55,6 +67,35 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let app = App::open(settings.clone()).await?;
     match cli.command {
+        Command::Invite { command } => match command {
+            InviteCommand::List => {
+                let invitations: Vec<(String, i64, String, i64)> = sqlx::query_as(
+                    "SELECT token_hash, quota_bytes, datetime(expires_at, 'unixepoch'), expires_at FROM invitations ORDER BY expires_at, token_hash",
+                )
+                .fetch_all(&app.db)
+                .await?;
+                let now = model::now();
+                println!("ID\tQUOTA\tEXPIRES_AT_UTC\tSTATUS");
+                for (id, quota, expires, expires_at) in invitations {
+                    let status = if expires_at > now {
+                        "active"
+                    } else {
+                        "expired"
+                    };
+                    println!("{id}\t{}\t{expires}\t{status}", format_size(quota));
+                }
+            }
+            InviteCommand::Revoke { id } => {
+                let result = sqlx::query("DELETE FROM invitations WHERE token_hash = ?")
+                    .bind(&id)
+                    .execute(&app.db)
+                    .await?;
+                if result.rows_affected() == 0 {
+                    bail!("unknown invitation: {id} (it may already have been used or removed)");
+                }
+                println!("Revoked invitation {id}");
+            }
+        },
         Command::Server => {
             let lock = std::fs::OpenOptions::new()
                 .create(true)
