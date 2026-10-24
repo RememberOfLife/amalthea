@@ -54,7 +54,9 @@ pub fn router(app: State) -> Router {
         .route("/health", get(|| async { "ok" }))
         .nest_service(
             "/res/static",
-            ServeDir::new(app.settings.static_dir.clone()),
+            Router::new()
+                .fallback_service(ServeDir::new(app.settings.static_dir.clone()))
+                .layer(middleware::from_fn(static_cache)),
         )
         .fallback(page)
         .layer(middleware::from_fn_with_state(app.clone(), security))
@@ -96,7 +98,9 @@ async fn security(AxumState(app): AxumState<State>, request: Request, next: Next
     }
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     headers.insert(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
@@ -105,6 +109,18 @@ async fn security(AxumState(app): AxumState<State>, request: Request, next: Next
     headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
     // Solid's noncompiled html tag uses Function to instantiate developer-owned templates.
     headers.insert("content-security-policy", HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+    response
+}
+
+async fn static_cache(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    if response.status().is_success() || response.status() == StatusCode::NOT_MODIFIED {
+        // Asset URLs are not fingerprinted, so keep freshness bounded.
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=86400"),
+        );
+    }
     response
 }
 

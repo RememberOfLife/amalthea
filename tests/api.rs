@@ -1399,6 +1399,40 @@ async fn publication_recovery_and_expired_upload_cleanup() {
 }
 
 #[tokio::test]
+async fn static_assets_are_cacheable_without_caching_private_responses() {
+    for prefix in ["", "/nested/amalthea"] {
+        let h = Harness::with_prefix(prefix).await;
+        for path in [
+            "/res/static/images/favicon.png",
+            "/res/static/src/main.js",
+            "/res/static/src/style.css",
+        ] {
+            for method in ["GET", "HEAD"] {
+                let (status, headers, body) = h.request(method, path, "", vec![], &[]).await;
+                assert_eq!(status, StatusCode::OK, "{method} {prefix}{path}");
+                assert_eq!(headers["cache-control"], "public, max-age=86400");
+                assert_eq!(headers["x-content-type-options"], "nosniff");
+                if method == "HEAD" {
+                    assert!(body.is_empty());
+                }
+                let modified = headers["last-modified"].to_str().unwrap();
+                let (status, headers, body) = h
+                    .request(method, path, "", vec![], &[("if-modified-since", modified)])
+                    .await;
+                assert_eq!(status, StatusCode::NOT_MODIFIED);
+                assert_eq!(headers["cache-control"], "public, max-age=86400");
+                assert!(body.is_empty());
+            }
+        }
+        let cookie = h.seed("Alice", 100).await;
+        for path in ["/", "/api/live/me", "/res/static/missing.png"] {
+            let (_, headers, _) = h.request("GET", path, &cookie, vec![], &[]).await;
+            assert_eq!(headers["cache-control"], "no-store", "{prefix}{path}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn homepage_and_prefix_redirect_work_with_and_without_a_subpath() {
     for prefix in ["", "/amalthea", "/nested/amalthea"] {
         let h = Harness::with_prefix(prefix).await;
