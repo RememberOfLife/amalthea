@@ -9,6 +9,7 @@ ExecStart=/usr/bin/env -- "@EXEC_INSTALL_DIR@/bin/amalthea" --config "@EXEC_INST
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
+UMask=0077
 
 [Install]
 WantedBy=default.target

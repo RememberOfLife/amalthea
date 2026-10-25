@@ -116,13 +116,23 @@ pub fn filename_key(name: &std::ffi::OsStr) -> String {
 impl FileRecord {
     pub fn disk_name(&self) -> crate::error::Result<std::ffi::OsString> {
         use std::os::unix::ffi::OsStringExt;
-        match self.name.strip_prefix('\0') {
+        let name = match self.name.strip_prefix('\0') {
             Some(encoded) => URL_SAFE_NO_PAD
                 .decode(encoded)
                 .map(std::ffi::OsString::from_vec)
                 .map_err(crate::error::Error::internal),
             None => Ok(self.name.clone().into()),
+        }?;
+        // Imported names may be incomplete, but must still be one component.
+        let mut parts = std::path::Path::new(&name).components();
+        if !matches!(parts.next(), Some(std::path::Component::Normal(_)))
+            || parts.next().is_some()
+            || name.as_encoded_bytes().contains(&0)
+            || name.as_encoded_bytes().contains(&b'/')
+        {
+            return Err(crate::error::Error::conflict("Invalid stored filename"));
         }
+        Ok(name)
     }
     pub fn require_ready(&self) -> crate::error::Result<()> {
         if self.status != "ready" {

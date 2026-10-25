@@ -11,6 +11,9 @@ use std::{
 };
 
 pub fn user_dir(app: &State, user: &User) -> Result<PathBuf> {
+    if !model::valid_username(&user.username) {
+        return Err(Error::conflict("Invalid stored username"));
+    }
     let path = app.settings.data_dir.join("users").join(&user.username);
     let meta = std::fs::symlink_metadata(&path)?;
     if !meta.is_dir() || meta.file_type().is_symlink() {

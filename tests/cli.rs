@@ -48,6 +48,45 @@ fn test_config() -> (tempfile::TempDir, PathBuf) {
 }
 
 #[tokio::test]
+async fn revoke_sessions_invalidates_only_the_requested_account() {
+    let (_dir, config) = test_config();
+    let app = App::open(Settings::load(&config).unwrap()).await.unwrap();
+    for name in ["Alice", "Bob"] {
+        let id = sqlx::query("INSERT INTO users (username, password_hash, quota_bytes, created_at) VALUES (?, 'unused', 0, 0)")
+            .bind(name).execute(&app.db).await.unwrap().last_insert_rowid();
+        sqlx::query("INSERT INTO sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)")
+            .bind(model::hash(name))
+            .bind(id)
+            .bind(model::now() + 3600)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        success(cli(&config, &["user", "revoke-sessions", "alice"])),
+        "Revoked 1 session(s) for alice\n"
+    );
+    for (name, expected) in [("Alice", StatusCode::UNAUTHORIZED), ("Bob", StatusCode::OK)] {
+        let response = routes::router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/live/uploads")
+                    .header("cookie", format!("amalthea_session={name}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    assert!(
+        !cli(&config, &["user", "revoke-sessions", "missing"])
+            .status
+            .success()
+    );
+}
+
+#[tokio::test]
 async fn list_and_revoke_registration_invitations() {
     let (_dir, config) = test_config();
     let empty = success(cli(&config, &["invite", "list"]));

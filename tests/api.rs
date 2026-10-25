@@ -13,6 +13,196 @@ struct Harness {
     app: State,
     router: Router,
 }
+
+#[tokio::test]
+async fn https_sessions_ignore_legacy_cookies_and_use_distinct_mount_names() {
+    for prefix in ["", "/share"] {
+        let h = Harness::with_prefix(prefix).await;
+        let cookie = h.seed("Alice", 0).await;
+        let token = cookie.split_once('=').unwrap().1;
+        assert!(cookie.starts_with("__Host-"));
+        assert_eq!(
+            h.json(
+                "GET",
+                "/api/live/uploads",
+                &format!("amalthea_session={token}"),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            h.json(
+                "GET",
+                "/api/live/uploads",
+                &format!("amalthea_session=attacker; {cookie}"),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let mut other = h.app.settings.clone();
+        other.webroot = "https://example.test/other".into();
+        assert_eq!(
+            h.json(
+                "GET",
+                "/api/live/uploads",
+                &format!("{}={token}", amalthea::auth::cookie_name(&other)),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+}
+
+#[tokio::test]
+async fn hundred_file_limit_counts_pending_empty_files_and_serializes_reservations() {
+    let h = Harness::new().await;
+    let cookie = h.seed("Alice", 0).await;
+    h.file(&cookie, "complete", b"").await;
+    let pending = h.start(&cookie, "pending", b"").await;
+    for i in 0..97 {
+        h.start(&cookie, &format!("empty{i}"), b"").await;
+    }
+    let input = |name| json!({"name":name,"size":0,"sha256":model::hash("")});
+    let (a, b) = tokio::join!(
+        h.json("POST", "/api/live/uploads", &cookie, input("last_a")),
+        h.json("POST", "/api/live/uploads", &cookie, input("last_b"))
+    );
+    assert!(matches!(
+        (a.0, b.0),
+        (StatusCode::OK, StatusCode::CONFLICT) | (StatusCode::CONFLICT, StatusCode::OK)
+    ));
+    assert_eq!(h.start(&cookie, "pending", b"").await, pending);
+    assert_eq!(h.finish(&cookie, &pending).await.0, StatusCode::OK);
+    assert_eq!(
+        h.json("POST", "/api/live/uploads", &cookie, input("overflow"))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        h.json(
+            "DELETE",
+            &format!("/api/live/files/{pending}"),
+            &cookie,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let replacement = h.start(&cookie, "replacement", b"").await;
+    assert_eq!(
+        h.json(
+            "DELETE",
+            &format!("/api/live/uploads/{replacement}"),
+            &cookie,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    h.start(&cookie, "after_cancel", b"").await;
+    let bob = h.seed("Bob", 0).await;
+    h.start(&bob, "independent", b"").await;
+}
+
+#[tokio::test]
+async fn ten_link_limit_counts_inactive_links_and_serializes_creation() {
+    let h = Harness::new().await;
+    let cookie = h.seed("Alice", 0).await;
+    let id = h.file(&cookie, "empty", b"").await;
+    let (first, _) = h.link(&cookie, &id).await;
+    for _ in 0..8 {
+        h.link(&cookie, &id).await;
+    }
+    let path = format!("/api/live/files/{id}/links");
+    let (a, b) = tokio::join!(
+        h.json("POST", &path, &cookie, json!({})),
+        h.json("POST", &path, &cookie, json!({}))
+    );
+    assert!(matches!(
+        (a.0, b.0),
+        (StatusCode::OK, StatusCode::CONFLICT) | (StatusCode::CONFLICT, StatusCode::OK)
+    ));
+    h.json(
+        "POST",
+        &format!("/api/live/links/{first}/revoke"),
+        &cookie,
+        Value::Null,
+    )
+    .await;
+    sqlx::query("UPDATE links SET expires_at = 0 WHERE id = ?")
+        .bind(&first)
+        .execute(&h.app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        h.json("POST", &path, &cookie, json!({})).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        h.json(
+            "DELETE",
+            &format!("/api/live/links/{first}"),
+            &cookie,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    h.link(&cookie, &id).await;
+    let other = h.file(&cookie, "other", b"").await;
+    h.link(&cookie, &other).await;
+}
+
+#[tokio::test]
+async fn database_paths_reject_escape_components_but_preserve_incomplete_names() {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use std::os::unix::ffi::OsStrExt;
+    let h = Harness::new().await;
+    let cookie = h.seed("Alice", 1).await;
+    let id = h.file(&cookie, "file", b"x").await;
+    let mut user = model::User {
+        id: 1,
+        username: "Alice".into(),
+        quota_bytes: 1,
+    };
+    let mut record = storage::owned_file(&h.app, &user, &id).await.unwrap();
+    for name in [
+        "",
+        ".",
+        "..",
+        "../escape",
+        "/absolute",
+        "a/b",
+        "a/.",
+        "a\0b",
+    ] {
+        record.name = name.into();
+        assert!(record.disk_name().is_err(), "{name:?}");
+        record.name = format!("\0{}", URL_SAFE_NO_PAD.encode(name));
+        assert!(record.disk_name().is_err(), "encoded {name:?}");
+    }
+    for bytes in [b".hidden".as_slice(), b"a space", b"non_utf8_\xff"] {
+        record.name = model::filename_key(std::ffi::OsStr::from_bytes(bytes));
+        assert_eq!(record.disk_name().unwrap().as_bytes(), bytes);
+    }
+    for name in ["../escape", "/absolute", "", ".", "a/b"] {
+        user.username = name.into();
+        assert_eq!(
+            storage::user_dir(&h.app, &user).unwrap_err().0,
+            StatusCode::CONFLICT
+        );
+    }
+}
 impl Harness {
     async fn new() -> Self {
         Self::with_prefix("").await
@@ -47,7 +237,10 @@ impl Harness {
             .execute(&self.app.db)
             .await
             .unwrap();
-        format!("amalthea_session={secret}")
+        format!(
+            "{}={secret}",
+            amalthea::auth::cookie_name(&self.app.settings)
+        )
     }
     async fn request(
         &self,
@@ -347,7 +540,9 @@ async fn invitation_registration_login_and_logout() {
         cookie.contains("HttpOnly")
             && cookie.contains("Secure")
             && cookie.contains("SameSite=Strict")
-            && cookie.contains("Path=/files/")
+            && cookie.contains("Path=/;")
+            && cookie.starts_with("__Host-")
+            && !cookie.contains("Domain=")
     );
     assert_eq!(
         h.json("POST", "/api/live/register", "", input).await.0,
@@ -557,6 +752,9 @@ async fn quotas_reserve_atomically_and_release_on_cancel() {
     let id = winner["id"].as_str().unwrap();
     let (_, me) = h.json("GET", "/api/live/me", &cookie, Value::Null).await;
     assert_eq!(me["reserved_bytes"], 7);
+    assert_eq!(me["file_count"], 1);
+    assert_eq!(me["max_files_per_user"], h.app.settings.max_files_per_user);
+    assert_eq!(me["max_links_per_file"], h.app.settings.max_links_per_file);
     assert_eq!(
         h.json(
             "DELETE",
@@ -569,6 +767,8 @@ async fn quotas_reserve_atomically_and_release_on_cancel() {
         StatusCode::NO_CONTENT
     );
     assert!(!storage::upload_path(&h.app, id).exists());
+    let (_, me) = h.json("GET", "/api/live/me", &cookie, Value::Null).await;
+    assert_eq!(me["file_count"], 0);
     let id = h.file(&cookie, "ten", b"0123456789").await;
     assert_eq!(
         h.json("POST", "/api/live/uploads", &cookie, input("more"))

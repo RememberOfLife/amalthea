@@ -465,7 +465,19 @@ function App() {
                                 <div
                                     class="d-flex justify-content-between align-items-center flex-wrap gap-2"
                                 >
-                                    <h1 class="h3 mb-0">Your files</h1>
+                                    <div
+                                        class="d-flex align-items-center gap-2"
+                                    >
+                                        <h1 class="h3 mb-0">Your files</h1>
+                                        <span
+                                            class="badge rounded-pill text-bg-secondary"
+                                            title="File slots used, including unfinished uploads"
+                                            aria-label=${() =>
+                                                `${me().file_count} of ${me().max_files_per_user} file slots used, including unfinished uploads`}
+                                            >${() =>
+                                                `${me().file_count}/${me().max_files_per_user}`}</span
+                                        >
+                                    </div>
                                     <button
                                         class="btn btn-sm btn-outline-secondary"
                                         onClick=${() => run(refresh)}
@@ -820,6 +832,7 @@ function App() {
             >${(file) =>
                 html`<${ShareModal}
                     file=${file()}
+                    maxLinks=${() => me().max_links_per_file}
                     close=${(_) => setShareFile()}
                 />`}<//
         >
@@ -1391,6 +1404,16 @@ function ShareModal(props) {
         title=${`Share ${props.file.name}`}
         close=${props.close}
     >
+        <div class="d-flex align-items-center gap-2 mb-2">
+            <h3 class="h6 mb-0">Sharing links</h3>
+            <span
+                class="badge rounded-pill text-bg-secondary"
+                title="Sharing links used for this file, including revoked and expired links"
+                aria-label=${() =>
+                    `${links().length} of ${props.maxLinks} sharing links used for this file`}
+                >${() => `${links().length}/${props.maxLinks}`}</span
+            >
+        </div>
         <p class="text-secondary">
             Revoke to stop sharing; delete to remove a link and its access log.
         </p>

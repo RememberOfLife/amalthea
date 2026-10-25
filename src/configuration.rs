@@ -22,6 +22,27 @@ pub struct Settings {
     #[serde(deserialize_with = "deserialize_workers")]
     pub processing_workers: usize,
     pub access_log_days: i64,
+    #[serde(deserialize_with = "deserialize_count")]
+    pub max_files_per_user: i64,
+    #[serde(deserialize_with = "deserialize_count")]
+    pub max_links_per_file: i64,
+}
+
+fn deserialize_count<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    struct Count;
+    impl serde::de::Visitor<'_> for Count {
+        type Value = i64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a positive integer count")
+        }
+        fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<i64, E> {
+            Ok(value)
+        }
+        fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<i64, E> {
+            i64::try_from(value).map_err(E::custom)
+        }
+    }
+    deserializer.deserialize_any(Count)
 }
 
 fn deserialize_workers<'de, D: serde::Deserializer<'de>>(
@@ -85,6 +106,8 @@ impl Default for Settings {
             reconcile_seconds: 60,
             processing_workers: 2,
             access_log_days: 90,
+            max_files_per_user: 100,
+            max_links_per_file: 10,
         }
     }
 }
@@ -143,6 +166,11 @@ impl Settings {
         {
             bail!("invalid quota, retention, reconciliation interval or processing worker count");
         }
+        if !(1..=100_000).contains(&self.max_files_per_user)
+            || !(1..=1_000).contains(&self.max_links_per_file)
+        {
+            bail!("max_files_per_user must be 1-100000 and max_links_per_file must be 1-1000");
+        }
         Ok(())
     }
     pub fn prefix(&self) -> &str {
@@ -183,6 +211,32 @@ mod tests {
         );
         for value in ["0", "257", "-1", "1.5"] {
             assert!(read(&format!(r#"{{"processing_workers":{value}}}"#)).is_err());
+        }
+    }
+
+    #[test]
+    fn file_and_link_limits_have_requested_defaults_and_reject_invalid_counts() {
+        let defaults = read("{}").unwrap();
+        assert_eq!(defaults.max_files_per_user, 100);
+        assert_eq!(defaults.max_links_per_file, 10);
+        for (field, maximum) in [
+            ("max_files_per_user", 100_000),
+            ("max_links_per_file", 1_000),
+        ] {
+            for value in [
+                "0".into(),
+                "-1".into(),
+                "1.5".into(),
+                "true".into(),
+                (maximum + 1).to_string(),
+            ] {
+                assert!(
+                    read(&format!(r#"{{"{field}":{value}}}"#)).is_err(),
+                    "{field}: {value}"
+                );
+            }
+            assert!(read(&format!(r#"{{"{field}":1}}"#)).is_ok());
+            assert!(read(&format!(r#"{{"{field}":{maximum}}}"#)).is_ok());
         }
     }
 

@@ -105,6 +105,14 @@ pub async fn start(
             "A file already has this name; rename or delete it first",
         ));
     }
+    // Pending uploads reserve a file slot even when their size is zero.
+    let count: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM files WHERE user_id = ?) + (SELECT COUNT(*) FROM uploads WHERE user_id = ?)")
+        .bind(user.id).bind(user.id).fetch_one(&app.db).await?;
+    if count >= app.settings.max_files_per_user {
+        return Err(Error::conflict(
+            "File count limit reached; delete files or cancel uploads first",
+        ));
+    }
     let remaining: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(size - offset), 0) FROM uploads")
         .fetch_one(&app.db)
         .await?;

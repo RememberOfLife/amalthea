@@ -22,7 +22,7 @@ pub struct App {
     pub mutation: Mutex<()>,
     upload_locks: std::sync::Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>,
     pub processing: std::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
-    pub password_jobs: Semaphore,
+    pub password_jobs: Arc<Semaphore>,
     pub login_attempts: Mutex<HashMap<String, (i64, u32)>>,
 }
 pub type State = Arc<App>;
@@ -79,7 +79,7 @@ impl App {
             mutation: Mutex::new(()),
             upload_locks: std::sync::Mutex::new(HashMap::new()),
             processing: std::sync::Mutex::new(HashMap::new()),
-            password_jobs: Semaphore::new(2),
+            password_jobs: Arc::new(Semaphore::new(2)),
             login_attempts: Mutex::new(HashMap::new()),
         }))
     }

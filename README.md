@@ -38,11 +38,16 @@ Other useful things:
 ./target/release/amalthea user list
 ./target/release/amalthea user quota zeus # show quota
 ./target/release/amalthea user quota zeus 2G # set quota
+./target/release/amalthea user revoke-sessions zeus # sign out all devices
 ./target/release/amalthea --config /path/to/config.json server
 ```
 
 Reducing a quota preserves existing files. New uploads and completion of pending
 uploads are blocked when usage plus reservations exceeds the quota.
+
+`max_files_per_user` defaults to 100 files including unfinished uploads and empty
+files. `max_links_per_file` defaults to 10; expired/revoked links count until
+deleted.
 
 ## Sharing and Transfers
 
@@ -110,7 +115,7 @@ renamed, downloaded, or shared. Failed jobs show an error and offer a retry.
 Interrupted jobs resume when the server restarts. The file list refreshes every
 two seconds; filesystem discovery also runs at `reconcile_seconds` intervals.
 
-Set `processing_workers` (default 2, range 1–256) to cap concurrent processing jobs
+Set `processing_workers` (default 2, range 1-256) to cap concurrent processing jobs
 across the platform. Dispatch rotates through users with pending work, choosing
 their oldest queued file on each turn. Running jobs are not preempted; idle slots
 can all serve one user when nobody else has queued work.

@@ -15,23 +15,41 @@ use axum::{
 };
 use serde::Deserialize;
 
-pub fn cookie_token(headers: &HeaderMap) -> Option<&str> {
+pub fn cookie_name(settings: &crate::configuration::Settings) -> String {
+    if settings.webroot.starts_with("https:") {
+        // __Host- forbids Domain and requires Path=/. A mount-specific name
+        // keeps separate installations from overwriting each other's cookies.
+        format!(
+            "__Host-amalthea_session_{}",
+            &model::hash(settings.prefix())[..16]
+        )
+    } else {
+        "amalthea_session".into()
+    }
+}
+pub fn cookie_token<'a>(app: &State, headers: &'a HeaderMap) -> Option<&'a str> {
+    let prefix = format!("{}=", cookie_name(&app.settings));
     headers
         .get(header::COOKIE)?
         .to_str()
         .ok()?
         .split(';')
-        .find_map(|v| v.trim().strip_prefix("amalthea_session="))
+        .find_map(|v| v.trim().strip_prefix(&prefix))
 }
 pub async fn user(app: &State, headers: &HeaderMap) -> Result<User> {
-    let token = cookie_token(headers).ok_or_else(Error::unauthorized)?;
+    let token = cookie_token(app, headers).ok_or_else(Error::unauthorized)?;
     sqlx::query_as("SELECT u.id, u.username, u.quota_bytes FROM users u JOIN sessions s ON s.user_id = u.id WHERE s.token_hash = ? AND s.expires_at > ?")
         .bind(model::hash(token)).bind(model::now()).fetch_optional(&app.db).await?.ok_or_else(Error::unauthorized)
 }
 fn cookie(app: &State, token: &str, age: i64) -> HeaderValue {
     HeaderValue::from_str(&format!(
-        "amalthea_session={token}; Path={}/; HttpOnly; SameSite=Strict; Max-Age={age}{}",
-        app.settings.prefix(),
+        "{}={token}; Path={}; HttpOnly; SameSite=Strict; Max-Age={age}{}",
+        cookie_name(&app.settings),
+        if app.settings.webroot.starts_with("https:") {
+            "/".to_owned()
+        } else {
+            format!("{}/", app.settings.prefix())
+        },
         if app.settings.webroot.starts_with("https:") {
             "; Secure"
         } else {
@@ -43,13 +61,31 @@ fn cookie(app: &State, token: &str, age: i64) -> HeaderValue {
 async fn session(app: &State, user: &User) -> Result<Response> {
     let token = model::secret();
     let age = app.settings.session_days * 86400;
+    // Serialize pruning and insertion so concurrent logins cannot exceed 32.
+    let mut tx = app.db.begin_with("BEGIN IMMEDIATE").await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = ? AND (expires_at <= ? OR token_hash NOT IN (SELECT token_hash FROM sessions WHERE user_id = ? ORDER BY expires_at DESC, rowid DESC LIMIT 31))")
+        .bind(user.id).bind(model::now()).bind(user.id).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)")
         .bind(model::hash(&token))
         .bind(user.id)
         .bind(model::now() + age)
-        .execute(&app.db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(([(header::SET_COOKIE, cookie(app, &token, age))], Json(user)).into_response())
+}
+
+async fn password_job<T: Send + 'static>(
+    permit: tokio::sync::OwnedSemaphorePermit,
+    job: impl FnOnce() -> T + Send + 'static,
+) -> Result<T> {
+    // Blocking Argon2 work continues after request cancellation. Its permit
+    // must remain held until the blocking worker actually exits.
+    Ok(tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        job()
+    })
+    .await?)
 }
 
 #[derive(Deserialize)]
@@ -84,7 +120,7 @@ pub async fn login(
         }
         entry.1 += 1;
     }
-    let _permit = app.password_jobs.try_acquire().map_err(|_| {
+    let permit = app.password_jobs.clone().try_acquire_owned().map_err(|_| {
         Error(
             StatusCode::TOO_MANY_REQUESTS,
             "Sign-in busy; please retry shortly".into(),
@@ -98,7 +134,7 @@ pub async fn login(
     .await?;
     // Use the same expensive verifier for unknown usernames.
     let encoded = record.as_ref().map(|r| r.3.clone());
-    let valid = tokio::task::spawn_blocking(move || {
+    let valid = password_job(permit, move || {
         if let Some(encoded) = encoded {
             PasswordHash::new(&encoded).is_ok_and(|h| {
                 Argon2::default()
@@ -223,24 +259,24 @@ pub async fn register(
 ) -> Result<Response> {
     if !model::valid_username(&input.username) {
         return Err(Error::bad(
-            "Use 1–64 ASCII letters, numbers, _, ., -, @ or +; no leading dot",
+            "Use 1-64 ASCII letters, numbers, _, ., -, @ or +; no leading dot",
         ));
     }
     if !(12..=1024).contains(&input.password.len()) {
-        return Err(Error::bad("Password must contain 12–1024 bytes"));
+        return Err(Error::bad("Password must contain 12-1024 bytes"));
     }
     let token_hash = model::hash(&input.token);
     let invitation = load_invitation(&app, &token_hash).await?;
     if !invitation.allows(&input.username) {
         return Err(Error::bad("Username must match the invitation"));
     }
-    let _permit = app.password_jobs.try_acquire().map_err(|_| {
+    let permit = app.password_jobs.clone().try_acquire_owned().map_err(|_| {
         Error(
             StatusCode::TOO_MANY_REQUESTS,
             "Registration busy; please retry shortly".into(),
         )
     })?;
-    let encoded = tokio::task::spawn_blocking(move || {
+    let encoded = password_job(permit, move || {
         Argon2::default()
             .hash_password(input.password.as_bytes(), &SaltString::generate(&mut OsRng))
             .map(|hash| hash.to_string())
@@ -305,7 +341,7 @@ pub async fn register(
 }
 
 pub async fn logout(AxumState(app): AxumState<State>, headers: HeaderMap) -> Result<Response> {
-    if let Some(token) = cookie_token(&headers) {
+    if let Some(token) = cookie_token(&app, &headers) {
         sqlx::query("DELETE FROM sessions WHERE token_hash = ?")
             .bind(model::hash(token))
             .execute(&app.db)
@@ -316,4 +352,104 @@ pub async fn logout(AxumState(app): AxumState<State>, headers: HeaderMap) -> Res
         StatusCode::NO_CONTENT,
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancelled_request_keeps_password_slot_until_worker_exits() {
+        let jobs = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = jobs.clone().try_acquire_owned().unwrap();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let request = tokio::spawn(password_job(permit, move || {
+            started.send(()).unwrap();
+            let _ = wait.recv();
+        }));
+        ready.await.unwrap();
+        request.abort();
+        let cancelled = request.await.unwrap_err().is_cancelled();
+        let blocked = jobs.try_acquire().is_err();
+        release.send(()).unwrap();
+        assert!(cancelled && blocked);
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(2), jobs.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn concurrent_sessions_are_capped_and_evicted_tokens_stop_working() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-data");
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = tempfile::tempdir_in(root).unwrap();
+        let app = crate::App::open(crate::configuration::Settings {
+            data_dir: dir.path().join("data"),
+            static_dir: std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("res/static"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO users(id, username, password_hash, quota_bytes, created_at) VALUES (1, 'Alice', 'unused', 0, 0), (2, 'Bob', 'unused', 0, 0)")
+            .execute(&app.db).await.unwrap();
+        sqlx::query("INSERT INTO sessions(token_hash, user_id, expires_at) VALUES (?, 1, ?), (?, 2, ?), ('expired', 1, 0)")
+            .bind(model::hash("old")).bind(model::now()+60)
+            .bind(model::hash("other")).bind(model::now()+60).execute(&app.db).await.unwrap();
+        let mut jobs = tokio::task::JoinSet::new();
+        for _ in 0..35 {
+            let app = app.clone();
+            jobs.spawn(async move {
+                session(
+                    &app,
+                    &User {
+                        id: 1,
+                        username: "Alice".into(),
+                        quota_bytes: 0,
+                    },
+                )
+                .await
+            });
+        }
+        while let Some(result) = jobs.join_next().await {
+            result.unwrap().unwrap();
+        }
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE user_id = 1")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(count, 32);
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, "amalthea_session=old".parse().unwrap());
+        assert_eq!(
+            user(&app, &headers).await.unwrap_err().0,
+            StatusCode::UNAUTHORIZED
+        );
+        headers.insert(header::COOKIE, "amalthea_session=other".parse().unwrap());
+        assert_eq!(user(&app, &headers).await.unwrap().id, 2);
+        let response = session(
+            &app,
+            &User {
+                id: 1,
+                username: "Alice".into(),
+                quota_bytes: 0,
+            },
+        )
+        .await
+        .unwrap();
+        headers.insert(
+            header::COOKIE,
+            response.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(user(&app, &headers).await.unwrap().id, 1);
+    }
 }

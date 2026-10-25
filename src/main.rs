@@ -63,6 +63,8 @@ enum UserCommand {
     },
     /// List users, quotas, used bytes and reserved upload bytes.
     List,
+    /// Invalidate all login sessions for an account, for example after losing a device.
+    RevokeSessions { username: String },
 }
 
 #[tokio::main]
@@ -191,6 +193,21 @@ async fn main() -> anyhow::Result<()> {
             drop(lock);
         }
         Command::User { command } => match command {
+            UserCommand::RevokeSessions { username } => {
+                let id: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE username = ?")
+                    .bind(&username)
+                    .fetch_optional(&app.db)
+                    .await?;
+                let id = id.context("unknown user")?;
+                let result = sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+                    .bind(id)
+                    .execute(&app.db)
+                    .await?;
+                println!(
+                    "Revoked {} session(s) for {username}",
+                    result.rows_affected()
+                );
+            }
             UserCommand::Create {
                 username,
                 any_username: _,
@@ -208,7 +225,7 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(username) = &username {
                     if !model::valid_username(username) {
                         bail!(
-                            "username must contain 1–64 ASCII letters, numbers, _, ., -, @ or +; no leading dot"
+                            "username must contain 1-64 ASCII letters, numbers, _, ., -, @ or +; no leading dot"
                         );
                     }
                     if !auth::username_available(&app, &mut tx, username, "")

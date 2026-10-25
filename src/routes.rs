@@ -240,8 +240,12 @@ async fn me(AxumState(app): AxumState<State>, headers: HeaderMap) -> Result<Json
     let _guard = app.mutation.lock().await;
     storage::reconcile_user(&app, &user).await?;
     let (used, reserved) = storage::usage(&app, user.id).await?;
+    let file_count: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM files WHERE user_id = ?) + (SELECT COUNT(*) FROM uploads WHERE user_id = ?)")
+        .bind(user.id).bind(user.id).fetch_one(&app.db).await?;
     Ok(Json(
-        json!({"user": user, "used_bytes": used, "reserved_bytes": reserved, "chunk_bytes": transfers::CHUNK_BYTES}),
+        json!({"user": user, "used_bytes": used, "reserved_bytes": reserved, "chunk_bytes": transfers::CHUNK_BYTES,
+            "file_count": file_count, "max_files_per_user": app.settings.max_files_per_user,
+            "max_links_per_file": app.settings.max_links_per_file}),
     ))
 }
 async fn files(
@@ -386,6 +390,15 @@ async fn create_link(
     let _guard = app.mutation.lock().await;
     let file = storage::owned_file(&app, &user, &id).await?;
     file.require_complete()?;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM links WHERE file_id = ?")
+        .bind(&id)
+        .fetch_one(&app.db)
+        .await?;
+    if count >= app.settings.max_links_per_file {
+        return Err(Error::conflict(
+            "Sharing link limit reached; delete old links first",
+        ));
+    }
     let secret = model::secret();
     let link_id = model::id();
     sqlx::query("INSERT INTO links (id, file_id, token_hash, token, label, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(&link_id).bind(&id).bind(model::hash(&secret)).bind(&secret).bind(input.label).bind(input.expires_at).bind(model::now()).execute(&app.db).await?;
