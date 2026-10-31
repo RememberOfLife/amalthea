@@ -57,10 +57,6 @@ deleted.
   Pause/resume and per-transfer speed limits are available. After a browser
   restart, reselect the original file; its full SHA-256 must match.
 - Resumable downloads store bytes and durable checkpoints in the browser's OPFS.
-  Resume after a reload/restart, then save the verified file. The browser-storage
-  list includes downloads from all accounts/links and leftover files; remove them
-  there to reclaim space. Saving a copy does not clear this storage. Browser storage
-  limits apply; clearing site data or using private browsing can remove it.
   Direct browser downloads are also available.
 
 You *can* also manually move files in and out of the users directory,
@@ -91,43 +87,21 @@ systemctl --user start amalthea
 ```
 
 Both commands require Git, SSH and SCP locally. They transfer an allowlisted
-`git archive HEAD` snapshot; commit changes to deployment inputs before running
-them. Local config, data, untracked files and Git metadata are never transferred.
-The target needs Linux, Bash, a current stable Rust toolchain, a C compiler,
-tar, Python 3, flock and a running user systemd manager, available over SSH.
-Neither command uses sudo. For startup at boot without logging in, ask the
-server administrator to enable lingering for the service user.
+`git archive HEAD` snapshot
 
 Setup creates a private `config.json` from the example only if it is absent,
 installs and enables the user service, and leaves it stopped for configuration.
 Use deploy for subsequent updates. Both commands build on the server with
 `cargo build --release --locked`, reusing the install directory's `target` cache.
-Deploy builds before stopping the service, replaces the binary and static assets,
-refreshes the service unit, and starts it again. Configuration, imprint and data
-are preserved. The previous binary and assets remain at `bin/amalthea.previous`
-and `res.previous` for manual recovery; database migrations are forward-only.
-One installation per service user is supported.
 
-File discovery immediately records metadata with a `processing` status; hashing runs
-outside the service mutation lock. Uploaded files enter the same durable queue.
-Processing and failed files count toward quota and can be deleted, but cannot be
-renamed, downloaded, or shared. Failed jobs show an error and offer a retry.
-Interrupted jobs resume when the server restarts. The file list refreshes every
-two seconds; filesystem discovery also runs at `reconcile_seconds` intervals.
+## AI Disclosure
 
-Set `processing_workers` (default 2, range 1-256) to cap concurrent processing jobs
-across the platform. Dispatch rotates through users with pending work, choosing
-their oldest queued file on each turn. Running jobs are not preempted; idle slots
-can all serve one user when nobody else has queued work.
+This project is almost 100% made by AI-assisted development tools.
+In particular GPT-6-Astra and GPT-6-Sol.
 
-Upload verification and interrupted publication recovery share this worker pool.
-Recovery cleanup is durable and idempotent, including a restart after unlinking
-the temporary file. Unfinished uploads still resume from their committed offsets.
+Care has been taken to achieve a uniform and easily usable UI.
+As well as a nice looking favicon + logo, and a (mostly) hand written readme file.
 
-Independent uploads write chunks and sync to disk concurrently. A per-upload lock
-protects each upload's bytes and committed offset through completion, cancellation,
-and expiry. Read-only upload status uses the database without a mutation lock.
-The global mutation lock remains for operations spanning filesystem names and
-database metadata (reservation, publication, deletion and reconciliation); SQLite
-transactions alone cannot make those filesystem changes atomic. Nothing waits
-for a busy upload while holding that global lock.
+Absolutely no care has been taken to make the underlying code of the frontend
+and backend look good or be well architected.
+This works, that's good enough for me.
